@@ -22,6 +22,13 @@ CREATE TABLE job_queue (
     pr_url          TEXT,
     total_cost_usd  NUMERIC(10, 4) NOT NULL DEFAULT 0.0,
 
+    -- Retry handling
+    attempt         INTEGER NOT NULL DEFAULT 1,
+    max_attempts    INTEGER NOT NULL DEFAULT 3,
+
+    -- GitHub token for repo access
+    github_token    TEXT NOT NULL,
+
     -- Telegram integration
     telegram_chat_id    BIGINT,
     telegram_message_id BIGINT,

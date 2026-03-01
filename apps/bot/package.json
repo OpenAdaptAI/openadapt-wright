@@ -12,7 +12,9 @@
     "clean": "rm -rf dist .turbo"
   },
   "dependencies": {
-    "@wright/shared": "workspace:*"
+    "@wright/shared": "workspace:*",
+    "@supabase/supabase-js": "^2.49.0",
+    "grammy": "^1.35.0"
   },
   "devDependencies": {
     "tsx": "^4.19.0",

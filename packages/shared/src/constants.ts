@@ -19,15 +19,36 @@ export const DEFAULT_MAX_BUDGET_USD = 5.0
 export const DEFAULT_TEST_TIMEOUT_SECONDS = 300
 
 /**
+ * Max turns per Claude session within a single loop iteration.
+ */
+export const DEFAULT_MAX_TURNS_PER_LOOP = 30
+
+/**
+ * Minimum budget remaining to start another loop (USD).
+ */
+export const MIN_BUDGET_PER_LOOP_USD = 0.10
+
+/**
+ * Default max retry attempts on worker crash.
+ */
+export const DEFAULT_MAX_ATTEMPTS = 3
+
+/**
  * How often the worker polls for new jobs (milliseconds).
  */
 export const POLL_INTERVAL_MS = 5_000
 
 /**
- * Maximum time a job can be claimed without progress before it's
- * considered stale and eligible for re-claiming (seconds).
+ * Time a job can sit in 'claimed' status before being considered stale (ms).
+ * A claiming worker that crashes between claim and start leaves the job here.
  */
-export const STALE_CLAIM_TIMEOUT_SECONDS = 600
+export const STALE_CLAIMED_MS = 2 * 60 * 1000  // 2 minutes
+
+/**
+ * Time a job can sit in 'running' status before being considered stale (ms).
+ * A worker that crashes mid-job leaves it here.
+ */
+export const STALE_RUNNING_MS = 30 * 60 * 1000  // 30 minutes
 
 /**
  * Supabase table names.
