@@ -1,0 +1,33 @@
+# Fly.io configuration for the wright worker
+# Scale-to-zero: worker starts when a job is queued, stops when idle
+
+app = "wright-worker"
+primary_region = "ord"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  WORKSPACE_DIR = "/workspace"
+
+[[vm]]
+  memory = "8gb"
+  cpu_kind = "shared"
+  cpus = 2
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+[checks]
+  [checks.health]
+    type = "http"
+    port = 8080
+    path = "/health"
+    interval = "30s"
+    timeout = "5s"

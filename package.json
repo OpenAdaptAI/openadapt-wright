@@ -1,0 +1,20 @@
+{
+  "name": "wright",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Generalized dev automation platform using Claude Agent SDK",
+  "scripts": {
+    "build": "turbo build",
+    "dev": "turbo dev",
+    "lint": "turbo lint",
+    "clean": "turbo clean"
+  },
+  "devDependencies": {
+    "turbo": "^2.4.0",
+    "typescript": "^5.7.0"
+  },
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
