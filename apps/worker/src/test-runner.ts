@@ -93,7 +93,15 @@ export function installDependencies(workDir: string, pm: PackageManager): void {
   if (!cmd) return
 
   console.log(`[test-runner] Installing dependencies with ${pm}: ${cmd}`)
-  execSync(cmd, { cwd: workDir, stdio: 'pipe', timeout: 300_000 })
+  try {
+    execSync(cmd, { cwd: workDir, stdio: 'pipe', timeout: 300_000 })
+  } catch (err) {
+    const stderr = err && typeof err === 'object' && 'stderr' in err
+      ? String((err as { stderr: unknown }).stderr).slice(-2000)
+      : ''
+    console.error(`[test-runner] Dependency install failed (${pm}):`, stderr)
+    throw new Error(`Failed to install dependencies with ${pm}: ${stderr || 'unknown error'}`)
+  }
 }
 
 /**

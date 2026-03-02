@@ -23,7 +23,8 @@ export async function runDevLoop(config: DevLoopConfig): Promise<DevLoopResult> 
   const maxTurns = config.maxTurnsPerLoop || DEFAULT_MAX_TURNS_PER_LOOP
 
   const supabase = createClient(config.supabaseUrl, config.supabaseServiceKey)
-  const workDir = `/tmp/wright-work/${job.id}`
+  const baseDir = process.env.WORKSPACE_DIR || '/tmp/wright-work'
+  const workDir = `${baseDir}/${job.id}`
 
   // Ensure clean workdir
   if (existsSync(workDir)) rmSync(workDir, { recursive: true, force: true })
@@ -64,7 +65,15 @@ export async function runDevLoop(config: DevLoopConfig): Promise<DevLoopResult> 
     })
 
     // 4. Install dependencies
-    installDependencies(workDir, packageManager)
+    try {
+      installDependencies(workDir, packageManager)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      await emit(supabase, job.id, 'error', undefined, {
+        message: `Dependency installation failed: ${msg}`,
+      })
+      throw err
+    }
 
     // 5. Dev Loop
     let allTestsPassed = false

@@ -1,0 +1,76 @@
+# =============================================================================
+# Docker ignore for wright worker
+#
+# NOTE: When building from the repo root (docker build -f apps/worker/Dockerfile .),
+# place a copy of this file at the repo root as .dockerignore, since Docker
+# reads .dockerignore from the build context root.
+# =============================================================================
+
+# Dependencies (installed inside container)
+**/node_modules/
+**/.pnpm-store/
+
+# Build artifacts (rebuilt inside container)
+**/dist/
+**/*.tsbuildinfo
+**/.turbo/
+
+# Version control
+.git/
+**/.git/
+**/.gitignore
+
+# IDE / Editor
+**/.vscode/
+**/.idea/
+**/*.swp
+**/*.swo
+**/.*~
+
+# Environment / Secrets
+**/.env
+**/.env.*
+**/.env.local
+**/.env.*.local
+
+# OS junk
+**/.DS_Store
+**/Thumbs.db
+
+# Documentation (not needed in image)
+**/README.md
+**/CHANGELOG.md
+**/LICENSE
+**/docs/
+
+# Tests (not needed in runtime image)
+**/__tests__/
+**/*.test.ts
+**/*.test.js
+**/*.spec.ts
+**/*.spec.js
+**/coverage/
+
+# CI/CD configs
+**/.github/
+**/.gitlab-ci.yml
+
+# Supabase (not needed in worker image)
+supabase/
+
+# Claude config
+**/.claude/
+
+# Fly configs (not needed inside image)
+**/fly.toml
+
+# Logs
+**/*.log
+**/npm-debug.log*
+**/pnpm-debug.log*
+
+# Docker files (prevent recursive context issues)
+**/Dockerfile
+**/Dockerfile.*
+**/.dockerignore
+**/docker-compose*.yml

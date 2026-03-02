@@ -63,9 +63,10 @@ export async function createPullRequest(
   body: string,
   baseBranch: string = 'main',
 ): Promise<string> {
-  const { execSync } = await import('child_process')
-  const result = execSync(
-    `gh pr create --title "${title.replace(/"/g, '\\"')}" --body "${body.replace(/"/g, '\\"')}" --base ${baseBranch}`,
+  const { execFileSync } = await import('child_process')
+  const result = execFileSync(
+    'gh',
+    ['pr', 'create', '--title', title, '--body', body, '--base', baseBranch],
     { cwd: workDir, encoding: 'utf-8' },
   )
   return result.trim() // Returns the PR URL

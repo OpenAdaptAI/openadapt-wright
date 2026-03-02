@@ -1,14 +1,13 @@
 -- Wright initial schema
 -- Tables: job_queue, job_events, test_results
 
--- Enable UUID generation
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+-- gen_random_uuid() is built-in to PostgreSQL 13+
 
 -- ============================================================
 -- job_queue: main task queue for dev automation jobs
 -- ============================================================
 CREATE TABLE job_queue (
-    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     repo_url        TEXT NOT NULL,
     branch          TEXT NOT NULL DEFAULT 'main',
     task            TEXT NOT NULL,
@@ -57,7 +56,7 @@ CREATE INDEX idx_job_queue_worker
 -- job_events: observability log for job lifecycle
 -- ============================================================
 CREATE TABLE job_events (
-    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     job_id          UUID NOT NULL REFERENCES job_queue(id) ON DELETE CASCADE,
     event_type      TEXT NOT NULL
                     CHECK (event_type IN (
@@ -77,7 +76,7 @@ CREATE INDEX idx_job_events_job_id
 -- test_results: detailed test run outcomes per loop iteration
 -- ============================================================
 CREATE TABLE test_results (
-    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     job_id          UUID NOT NULL REFERENCES job_queue(id) ON DELETE CASCADE,
     loop_number     INTEGER NOT NULL,
     passed          INTEGER NOT NULL DEFAULT 0,
