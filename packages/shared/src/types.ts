@@ -43,12 +43,24 @@ export interface Job {
   worker_id?: string
   pr_url?: string
   total_cost_usd: number
+  /** Current attempt number (1-based) */
+  attempt: number
+  /** Maximum retries on worker crash */
+  max_attempts: number
+  /** GitHub token for repo access */
+  github_token: string
+
+  // Telegram integration
   telegram_chat_id?: number
   telegram_message_id?: number
+
+  // Timestamps
   created_at: string
   claimed_at?: string
   started_at?: string
   completed_at?: string
+
+  // Error details on failure
   error?: string
 }
 
@@ -64,7 +76,7 @@ export interface TestResults {
   /** Duration in seconds */
   duration: number
   failures: TestFailure[]
-  /** Raw test runner output */
+  /** Raw test runner output (truncated) */
   raw?: string
 }
 
@@ -81,18 +93,32 @@ export interface TestFailure {
  * Configuration for the dev loop (Ralph Loop).
  */
 export interface DevLoopConfig {
-  /** Maximum number of edit-test-fix iterations */
-  max_loops: number
-  /** Maximum spend in USD before aborting */
-  max_budget_usd: number
-  /** Test runner to use (auto-detected if not specified) */
-  test_runner?: TestRunner
-  /** Package manager to use (auto-detected if not specified) */
-  package_manager?: PackageManager
+  job: Job
+  supabaseUrl: string
+  supabaseServiceKey: string
   /** Claude model to use */
   model: string
+  /** Max turns per Claude session within a single loop */
+  maxTurnsPerLoop: number
   /** Timeout per test run in seconds */
-  test_timeout_seconds: number
+  testTimeoutSeconds: number
+  /** Anthropic API key (uses env ANTHROPIC_API_KEY if not set) */
+  anthropicApiKey?: string
+  /** Abort controller for graceful cancellation (e.g. SIGTERM) */
+  abortController?: AbortController
+}
+
+/**
+ * Result of a completed dev loop.
+ */
+export interface DevLoopResult {
+  success: boolean
+  loopsCompleted: number
+  totalCostUsd: number
+  finalTestResults: TestResults
+  prUrl?: string
+  commitSha?: string
+  error?: string
 }
 
 /**
