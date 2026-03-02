@@ -168,4 +168,4 @@ fly deploy
 
 ## Plan
 
-See the full design document: [wright plan](https://github.com/OpenAdaptAI/wright/blob/main/PLAN.md)
+See the full design document: [wright plan](https://github.com/OpenAdaptAI/openadapt-wright/blob/main/PLAN.md)
