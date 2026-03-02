@@ -86,6 +86,9 @@ export async function runDevLoop(config: DevLoopConfig): Promise<DevLoopResult> 
       loop <= maxLoops && totalCost < maxBudget && !allTestsPassed;
       loop++
     ) {
+      // Check for abort (e.g. SIGTERM)
+      if (config.abortController?.signal.aborted) break
+
       // Minimum budget guard
       const remainingBudget = maxBudget - totalCost
       if (loop > 1 && remainingBudget < MIN_BUDGET_PER_LOOP_USD) {
@@ -122,6 +125,7 @@ export async function runDevLoop(config: DevLoopConfig): Promise<DevLoopResult> 
             maxTurns,
             maxBudgetUsd: maxBudget - totalCost,
             anthropicApiKey: config.anthropicApiKey,
+            abortController: config.abortController,
             sessionId,
             onToken: (text: string) => {
               // Future: stream to Supabase realtime channel
@@ -133,15 +137,20 @@ export async function runDevLoop(config: DevLoopConfig): Promise<DevLoopResult> 
               })
             },
           }),
-          new Promise<never>((_resolve, reject) =>
-            setTimeout(
+          new Promise<never>((_resolve, reject) => {
+            const timer = setTimeout(
               () =>
                 reject(
                   new Error('Claude session timed out after 20 minutes'),
                 ),
               CLAUDE_SESSION_TIMEOUT_MS,
-            ),
-          ),
+            )
+            // Clear timeout if abort fires (prevents dangling timer)
+            config.abortController?.signal.addEventListener('abort', () => {
+              clearTimeout(timer)
+              reject(new Error('Claude session aborted'))
+            }, { once: true })
+          }),
         ])
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err)

@@ -27,11 +27,38 @@ if (!BOT_TOKEN) {
   process.exit(1)
 }
 
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN
+if (!GITHUB_TOKEN) {
+  console.error('Fatal: GITHUB_TOKEN environment variable is not set.')
+  process.exit(1)
+}
+
 // ---------------------------------------------------------------------------
 // Bot setup
 // ---------------------------------------------------------------------------
 
 const bot = new Bot(BOT_TOKEN)
+
+// ---------------------------------------------------------------------------
+// Authorization middleware — restrict to known Telegram users
+// ---------------------------------------------------------------------------
+
+const ALLOWED_TELEGRAM_USERS = process.env.ALLOWED_TELEGRAM_USERS
+  ? process.env.ALLOWED_TELEGRAM_USERS.split(',')
+      .map((id) => parseInt(id.trim(), 10))
+      .filter(Number.isFinite)
+  : []
+
+if (ALLOWED_TELEGRAM_USERS.length > 0) {
+  bot.use(async (ctx, next) => {
+    const userId = ctx.from?.id
+    if (!userId || !ALLOWED_TELEGRAM_USERS.includes(userId)) {
+      await ctx.reply('Unauthorized. Your user ID: ' + (userId ?? 'unknown'))
+      return
+    }
+    await next()
+  })
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -201,6 +228,7 @@ bot.command('task', async (ctx: Context) => {
       task: description,
       chatId: ctx.chat!.id,
       messageId: ack.message_id,
+      githubToken: GITHUB_TOKEN,
     })
 
     await ctx.reply(

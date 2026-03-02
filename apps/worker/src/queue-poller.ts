@@ -259,6 +259,7 @@ async function processJob(job: Job): Promise<void> {
       maxTurnsPerLoop: parseInt(process.env.MAX_TURNS_PER_LOOP || '30'),
       testTimeoutSeconds: parseInt(process.env.TEST_TIMEOUT_SECONDS || '300'),
       anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+      abortController,
     })
 
     if (!shuttingDown) {
