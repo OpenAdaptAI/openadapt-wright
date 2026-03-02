@@ -102,6 +102,9 @@ ENV PATH="${CARGO_HOME}/bin:${PATH}"
 # ---- npm (already in node:22-slim, but ensure latest) ----
 RUN npm install -g npm@latest 2>/dev/null || true
 
+# ---- Claude Code CLI (required by @anthropic-ai/claude-agent-sdk) ----
+RUN npm install -g @anthropic-ai/claude-code
+
 # ---- Application ----
 WORKDIR /app
 
