@@ -16,6 +16,7 @@ export interface ClaudeSessionConfig {
 
 const ALLOWED_ENV_KEYS = [
   'PATH', 'HOME', 'USER', 'SHELL', 'TERM', 'LANG', 'LC_ALL',
+  'TMPDIR', 'TMP', 'TEMP',
   'NODE_ENV', 'WORKSPACE_DIR',
   'ANTHROPIC_API_KEY',
 ]

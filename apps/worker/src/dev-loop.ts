@@ -149,7 +149,7 @@ export async function runDevLoop(config: DevLoopConfig): Promise<DevLoopResult> 
             config.abortController?.signal.addEventListener('abort', () => {
               clearTimeout(timer)
               reject(new Error('Claude session aborted'))
-            })
+            }, { once: true })
           }),
         ])
       } catch (err) {
