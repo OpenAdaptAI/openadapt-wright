@@ -12,7 +12,7 @@ primary_region = "ord"
   WORKSPACE_DIR = "/workspace"
 
 [[vm]]
-  memory = "8gb"
+  memory = "4gb"
   cpu_kind = "shared"
   cpus = 2
 
