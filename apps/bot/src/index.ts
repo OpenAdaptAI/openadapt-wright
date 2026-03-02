@@ -44,7 +44,9 @@ const bot = new Bot(BOT_TOKEN)
 // ---------------------------------------------------------------------------
 
 const ALLOWED_TELEGRAM_USERS = process.env.ALLOWED_TELEGRAM_USERS
-  ? process.env.ALLOWED_TELEGRAM_USERS.split(',').map((id) => parseInt(id.trim(), 10))
+  ? process.env.ALLOWED_TELEGRAM_USERS.split(',')
+      .map((id) => parseInt(id.trim(), 10))
+      .filter(Number.isFinite)
   : []
 
 if (ALLOWED_TELEGRAM_USERS.length > 0) {

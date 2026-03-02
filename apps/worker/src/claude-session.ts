@@ -78,7 +78,7 @@ export async function runClaudeSession(config: ClaudeSessionConfig): Promise<Cla
         permissionMode: 'bypassPermissions',
         allowDangerouslySkipPermissions: true,
         env,
-        ...(config.abortController ? { abortController: config.abortController } : {}),
+        abortController: config.abortController,
         stderr: (data: string) => {
           if (data.trim()) {
             console.error('[claude-code stderr]', data.trim())
