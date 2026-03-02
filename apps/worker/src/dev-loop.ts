@@ -43,11 +43,11 @@ export async function runDevLoop(config: DevLoopConfig): Promise<DevLoopResult> 
   }
 
   try {
-    // 1. Clone
+    // 1. Clone (checkout the specified base branch)
     await emit(supabase, job.id, 'cloned', undefined, { message: 'Cloning repository...' })
-    await cloneRepo(job.repo_url, workDir, job.github_token)
+    await cloneRepo(job.repo_url, workDir, job.github_token, job.branch)
 
-    // 2. Create feature branch
+    // 2. Create feature branch from the base branch
     const branchName = `wright/${job.id.slice(0, 8)}`
     await createFeatureBranch(workDir, branchName)
 

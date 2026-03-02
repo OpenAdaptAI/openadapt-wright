@@ -1,11 +1,12 @@
 import simpleGit from 'simple-git'
 
-export async function cloneRepo(repoUrl: string, workDir: string, token: string): Promise<void> {
+export async function cloneRepo(repoUrl: string, workDir: string, token: string, branch?: string): Promise<void> {
   const cleanToken = token.trim()
   const authedUrl = repoUrl.replace('https://', `https://x-access-token:${cleanToken}@`)
   const git = simpleGit()
   try {
-    await git.clone(authedUrl, workDir)
+    const cloneArgs = branch ? ['--branch', branch] : []
+    await git.clone(authedUrl, workDir, cloneArgs)
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     throw new Error(sanitizeGitError(msg, cleanToken))
