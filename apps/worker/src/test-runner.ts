@@ -177,9 +177,18 @@ export function runTests(
 }
 
 /**
+ * Strip ANSI escape codes from test output for reliable parsing.
+ */
+function stripAnsi(str: string): string {
+  // eslint-disable-next-line no-control-regex
+  return str.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '')
+}
+
+/**
  * Parse test runner output into structured results.
  */
 function parseTestOutput(runner: TestRunner, output: string, exitCode: number): TestResults {
+  output = stripAnsi(output)
   const base: TestResults = {
     passed: 0,
     failed: 0,
