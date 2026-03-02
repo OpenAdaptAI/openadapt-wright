@@ -245,12 +245,22 @@ function parsePytest(output: string, exitCode: number, base: TestResults): TestR
 }
 
 function parseJest(output: string, exitCode: number, base: TestResults): TestResults {
-  // Jest/Vitest summary: "Tests: 2 failed, 5 passed, 7 total"
-  const testsMatch = output.match(/Tests:\s+(?:(\d+) failed,?\s*)?(?:(\d+) passed,?\s*)?(\d+) total/)
-  if (testsMatch) {
-    base.failed = parseInt(testsMatch[1] || '0')
-    base.passed = parseInt(testsMatch[2] || '0')
-    base.total = parseInt(testsMatch[3] || '0')
+  // Jest summary: "Tests: 2 failed, 5 passed, 7 total"
+  const jestMatch = output.match(/Tests:\s+(?:(\d+) failed,?\s*)?(?:(\d+) passed,?\s*)?(\d+) total/)
+  if (jestMatch) {
+    base.failed = parseInt(jestMatch[1] || '0')
+    base.passed = parseInt(jestMatch[2] || '0')
+    base.total = parseInt(jestMatch[3] || '0')
+  }
+
+  // Vitest summary: "Tests  2 passed (2)" or "Tests  1 failed | 2 passed (3)"
+  if (!jestMatch) {
+    const vitestMatch = output.match(/Tests\s+(?:(\d+) failed\s*\|?\s*)?(?:(\d+) passed\s*)?\((\d+)\)/)
+    if (vitestMatch) {
+      base.failed = parseInt(vitestMatch[1] || '0')
+      base.passed = parseInt(vitestMatch[2] || '0')
+      base.total = parseInt(vitestMatch[3] || '0')
+    }
   }
 
   // Extract failing test names
