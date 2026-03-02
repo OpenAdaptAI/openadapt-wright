@@ -104,6 +104,8 @@ export interface DevLoopConfig {
   testTimeoutSeconds: number
   /** Anthropic API key (uses env ANTHROPIC_API_KEY if not set) */
   anthropicApiKey?: string
+  /** Abort controller for graceful cancellation (e.g. SIGTERM) */
+  abortController?: AbortController
 }
 
 /**

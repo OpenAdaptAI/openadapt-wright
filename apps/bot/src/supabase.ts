@@ -46,6 +46,7 @@ export interface InsertJobParams {
   task: string
   chatId: number
   messageId: number
+  githubToken: string
   branch?: string
   maxLoops?: number
   maxBudgetUsd?: number
@@ -69,6 +70,7 @@ export async function insertJob(params: InsertJobParams): Promise<Job> {
       max_budget_usd: params.maxBudgetUsd ?? DEFAULT_MAX_BUDGET_USD,
       status: JOB_STATUS.QUEUED,
       total_cost_usd: 0,
+      github_token: params.githubToken,
       telegram_chat_id: params.chatId,
       telegram_message_id: params.messageId,
     })

@@ -9,9 +9,16 @@ export interface ClaudeSessionConfig {
   maxBudgetUsd: number
   anthropicApiKey?: string
   sessionId?: string
+  abortController?: AbortController
   onToken?: (text: string) => void
   onToolUse?: (toolName: string, input: string) => void
 }
+
+const ALLOWED_ENV_KEYS = [
+  'PATH', 'HOME', 'USER', 'SHELL', 'TERM', 'LANG', 'LC_ALL',
+  'NODE_ENV', 'WORKSPACE_DIR',
+  'ANTHROPIC_API_KEY',
+]
 
 export interface ClaudeSessionResult {
   costUsd: number
@@ -49,10 +56,12 @@ export async function runClaudeSession(config: ClaudeSessionConfig): Promise<Cla
   let sessionId = config.sessionId
 
   try {
-    // Remove CLAUDECODE env var to prevent "nested session" detection when the worker
-    // itself is running inside a Claude Code session (e.g. during development).
-    const env: Record<string, string | undefined> = { ...process.env }
-    delete env.CLAUDECODE
+    // Build a minimal env to avoid leaking secrets (SUPABASE_SERVICE_ROLE_KEY,
+    // BOT_TOKEN, etc.) into the Claude subprocess.
+    const env: Record<string, string> = {}
+    for (const key of ALLOWED_ENV_KEYS) {
+      if (process.env[key]) env[key] = process.env[key]!
+    }
     if (config.anthropicApiKey) {
       env.ANTHROPIC_API_KEY = config.anthropicApiKey
     }
@@ -68,6 +77,7 @@ export async function runClaudeSession(config: ClaudeSessionConfig): Promise<Cla
         permissionMode: 'bypassPermissions',
         allowDangerouslySkipPermissions: true,
         env,
+        ...(config.abortController ? { abortController: config.abortController } : {}),
         stderr: (data: string) => {
           if (data.trim()) {
             console.error('[claude-code stderr]', data.trim())
