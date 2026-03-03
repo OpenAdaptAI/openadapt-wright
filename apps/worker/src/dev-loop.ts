@@ -11,7 +11,7 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import type { DevLoopConfig, DevLoopResult, TestResults, TestFailure } from '@wright/shared'
 import { MIN_BUDGET_PER_LOOP_USD, DEFAULT_MAX_TURNS_PER_LOOP } from '@wright/shared'
-import { cloneRepo, createFeatureBranch, commitAndPush, createPullRequest } from './github-ops.js'
+import { cloneRepo, createFeatureBranch, checkoutExistingBranch, commitAndPush, createPullRequest } from './github-ops.js'
 import { detectTestRunner, detectPackageManager, installDependencies, runTests } from './test-runner.js'
 import { runClaudeSession } from './claude-session.js'
 import { existsSync, rmSync, mkdirSync } from 'fs'
@@ -55,13 +55,22 @@ export async function runDevLoop(config: DevLoopConfig): Promise<DevLoopResult> 
   }
 
   try {
-    // 1. Clone (checkout the specified base branch)
+    // 1. Clone the repository
     await emit(supabase, job.id, 'cloned', undefined, { message: 'Cloning repository...' })
-    await cloneRepo(job.repo_url, workDir, job.github_token, job.branch)
 
-    // 2. Create feature branch from the base branch
-    const branchName = `wright/${job.id.slice(0, 8)}`
-    await createFeatureBranch(workDir, branchName)
+    // Revision jobs have a feature_branch set — clone main then checkout that branch.
+    // New jobs clone the base branch and create a fresh feature branch.
+    const isRevision = !!job.feature_branch
+    let branchName: string
+
+    if (isRevision) {
+      await cloneRepo(job.repo_url, workDir, job.github_token)
+      branchName = await checkoutExistingBranch(workDir, job.feature_branch!)
+    } else {
+      await cloneRepo(job.repo_url, workDir, job.github_token, job.branch)
+      branchName = `wright/${job.id.slice(0, 8)}`
+      await createFeatureBranch(workDir, branchName)
+    }
 
     // 3. Auto-detect test runner and package manager
     const testRunner = job.test_runner || detectTestRunner(workDir)
@@ -246,25 +255,55 @@ export async function runDevLoop(config: DevLoopConfig): Promise<DevLoopResult> 
     }
 
     // 6. Commit and push
+    // Try to read a Claude-generated PR title from the workdir
+    const prTitleFile = `${workDir}/.wright-pr-title`
+    let generatedTitle: string | undefined
+    try {
+      const { readFileSync } = await import('fs')
+      generatedTitle = readFileSync(prTitleFile, 'utf-8').trim().slice(0, 70)
+      // Clean up the file so it doesn't get committed
+      const { unlinkSync } = await import('fs')
+      unlinkSync(prTitleFile)
+    } catch {
+      // No title file — will fall back to task-based title
+    }
+
+    const prTitle = generatedTitle || `feat: ${job.task.slice(0, 60)}`
     const commitMessage = allTestsPassed
-      ? `feat: ${job.task.slice(0, 60)}`
+      ? prTitle
       : `wip: ${job.task.slice(0, 60)} (${lastTestResults.passed}/${lastTestResults.total} tests passing)`
 
     const commitSha = await commitAndPush(workDir, commitMessage, job.github_token)
 
-    // 7. Create PR
+    // 7. Create PR (skip for revision jobs — the PR already exists)
     let prUrl: string | undefined
-    try {
-      prUrl = await createPullRequest(
-        workDir,
-        job.task.slice(0, 70),
-        buildPrBody(job.task, lastTestResults, loopsCompleted, totalCost),
-        job.branch,
-        job.github_token,
-      )
-      await emit(supabase, job.id, 'pr_created', undefined, { prUrl })
-    } catch (err) {
-      console.error('[dev-loop] Failed to create PR:', err)
+    if (isRevision) {
+      // For revisions we just pushed to the existing branch; the PR auto-updates.
+      // Look up the existing PR URL from the parent job.
+      if (job.parent_job_id) {
+        const { data: parentJob } = await supabase
+          .from('job_queue')
+          .select('pr_url')
+          .eq('id', job.parent_job_id)
+          .single()
+        prUrl = parentJob?.pr_url
+      }
+      if (prUrl) {
+        await emit(supabase, job.id, 'pr_created', undefined, { prUrl, revision: true })
+      }
+    } else {
+      try {
+        prUrl = await createPullRequest(
+          workDir,
+          prTitle,
+          buildPrBody(job.task, lastTestResults, loopsCompleted, totalCost),
+          job.branch,
+          job.github_token,
+        )
+        await emit(supabase, job.id, 'pr_created', undefined, { prUrl })
+      } catch (err) {
+        console.error('[dev-loop] Failed to create PR:', err)
+      }
     }
 
     await emit(supabase, job.id, 'completed', undefined, {
@@ -329,7 +368,10 @@ ${workDir}
 - NEVER modify package manifests (package.json, pyproject.toml, Cargo.toml, go.mod, setup.py, setup.cfg, etc.) unless the task explicitly requires adding or removing a dependency.
 - NEVER modify lock files (uv.lock, pnpm-lock.yaml, package-lock.json, yarn.lock, Cargo.lock, poetry.lock, etc.) under any circumstances.
 - If the task is about documentation (README, docs/, *.md), ONLY modify documentation files. Do NOT touch source code, tests, or manifests.
-- When in doubt about whether a file is in scope, leave it unchanged.`
+- When in doubt about whether a file is in scope, leave it unchanged.
+
+## PR Title
+After completing your changes, write a short conventional-commit-style PR title (e.g. "feat: add ecosystem section to README" or "fix: correct broken link in docs") to the file \`.wright-pr-title\` in the repo root. The title MUST be under 70 characters. Do NOT include a PR body — just the title on a single line.`
 }
 
 function buildInitialPrompt(

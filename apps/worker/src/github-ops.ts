@@ -35,6 +35,50 @@ export async function createFeatureBranch(
   return branchName
 }
 
+/**
+ * Check out an existing remote branch (e.g. for revision jobs that push to
+ * an already-open PR's branch).
+ */
+export async function checkoutExistingBranch(
+  workDir: string,
+  branchName: string,
+): Promise<string> {
+  const git = simpleGit(workDir)
+  await git.fetch('origin', branchName)
+  await git.checkout(branchName)
+  return branchName
+}
+
+/**
+ * Look up the head branch name for a GitHub pull request.
+ * Requires `githubToken` for private repos.
+ */
+export async function getPrBranch(
+  repoUrl: string,
+  prNumber: number,
+  githubToken?: string,
+): Promise<{ branch: string; repoUrl: string }> {
+  const { execFileSync } = await import('child_process')
+  const env: Record<string, string> = {
+    PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin',
+    HOME: process.env.HOME || '/home/wright',
+  }
+  if (githubToken) {
+    env.GH_TOKEN = githubToken
+  }
+  // Extract owner/repo from URL
+  const match = repoUrl.match(/github\.com\/([^/]+\/[^/]+?)(?:\.git)?$/)
+  if (!match) throw new Error(`Cannot parse GitHub repo from URL: ${repoUrl}`)
+  const nwo = match[1] // name-with-owner e.g. "OpenAdaptAI/OpenAdapt"
+
+  const json = execFileSync(
+    'gh',
+    ['api', `repos/${nwo}/pulls/${prNumber}`, '--jq', '.head.ref'],
+    { encoding: 'utf-8', env },
+  )
+  return { branch: json.trim(), repoUrl }
+}
+
 export async function commitAndPush(workDir: string, message: string, githubToken?: string): Promise<string> {
   const git = simpleGit(workDir)
 

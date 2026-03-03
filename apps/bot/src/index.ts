@@ -164,6 +164,36 @@ function isValidRepoUrl(url: string): boolean {
   }
 }
 
+/**
+ * Extract a job ID from a bot message (looks for patterns like "Job ID: <uuid>"
+ * or "[<short-id>]" in the message text).
+ */
+function extractJobIdFromMessage(text: string): string | null {
+  // Full UUID pattern: "Job ID: xxxxxxxx-xxxx-..."
+  const fullMatch = text.match(/Job ID:\s*([0-9a-f-]{36})/i)
+  if (fullMatch) return fullMatch[1]
+  // Full UUID inside "Job xxxxxxxx" (short ID in status messages)
+  const shortMatch = text.match(/Job\s+([0-9a-f]{8})\b/i)
+  if (shortMatch) return shortMatch[1]
+  // Bracket prefix: "[xxxxxxxx]"
+  const bracketMatch = text.match(/\[([0-9a-f]{8})\]/)
+  if (bracketMatch) return bracketMatch[1]
+  return null
+}
+
+/**
+ * Parse a GitHub PR URL into its components.
+ * Returns null if the URL is not a valid PR URL.
+ */
+function parsePrUrl(url: string): { repoUrl: string; prNumber: number } | null {
+  const match = url.match(/^https?:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/)
+  if (!match) return null
+  return {
+    repoUrl: `https://github.com/${match[1]}`,
+    prNumber: parseInt(match[2], 10),
+  }
+}
+
 /** Build PR approval inline keyboard. */
 function buildPrKeyboard(jobId: string, prUrl: string): InlineKeyboard {
   return new InlineKeyboard()
@@ -186,10 +216,14 @@ bot.command('start', async (ctx: Context) => {
       '',
       '<b>Commands:</b>',
       '/task &lt;repo_url&gt; &lt;description&gt; -- Submit a dev task',
+      '/task &lt;pr_url&gt; &lt;feedback&gt; -- Revise an existing PR',
+      '/revise &lt;job_id&gt; &lt;feedback&gt; -- Revise a job\'s PR',
       '/status &lt;job_id&gt; -- Check job status',
       '/cancel &lt;job_id&gt; -- Cancel a running job',
       '/verbose -- Enable all event notifications (default)',
       '/quiet -- Only send milestone notifications; silence noisy events',
+      '',
+      'You can also <b>reply</b> to any job message with feedback to revise its PR.',
       '',
       'When a PR is ready, I will send approve/reject buttons.',
     ].join('\n'),
@@ -213,6 +247,79 @@ bot.command('quiet', async (ctx: Context) => {
   )
 })
 
+bot.command('revise', async (ctx: Context) => {
+  const text = ctx.message?.text ?? ''
+  const parts = text.split(/\s+/)
+
+  if (parts.length < 3) {
+    await ctx.reply(
+      'Usage: <code>/revise &lt;job_id&gt; &lt;feedback&gt;</code>\n\n'
+        + 'Pushes changes to the existing PR branch based on your feedback.',
+      { parse_mode: 'HTML' },
+    )
+    return
+  }
+
+  const jobIdInput = parts[1]
+  const feedback = parts.slice(2).join(' ')
+
+  try {
+    // Look up the original job — support both full UUID and 8-char prefix
+    const originalJob = await getJob(jobIdInput)
+    if (!originalJob) {
+      await ctx.reply(
+        `No job found with ID <code>${escapeHtml(jobIdInput)}</code>.`,
+        { parse_mode: 'HTML' },
+      )
+      return
+    }
+
+    if (!originalJob.pr_url) {
+      await ctx.reply('That job has no PR yet. Cannot revise.')
+      return
+    }
+
+    // Determine the feature branch from the original job
+    const featureBranch = originalJob.feature_branch || `wright/${originalJob.id.slice(0, 8)}`
+
+    const ack = await ctx.reply(
+      `\u{1F504} Queuing revision for <code>${featureBranch}</code>...`,
+      { parse_mode: 'HTML' },
+    )
+
+    const job = await insertJob({
+      repoUrl: originalJob.repo_url,
+      task: feedback,
+      chatId: ctx.chat!.id,
+      messageId: ack.message_id,
+      githubToken: GITHUB_TOKEN,
+      branch: originalJob.branch,
+      featureBranch,
+      parentJobId: originalJob.id,
+    })
+
+    await ctx.reply(
+      [
+        '\u{1F504} <b>Revision queued!</b>',
+        '',
+        `<b>Job ID:</b> <code>${job.id}</code>`,
+        `<b>Revising:</b> <code>${originalJob.id.slice(0, 8)}</code>`,
+        `<b>Branch:</b> <code>${featureBranch}</code>`,
+        `<b>Feedback:</b> ${escapeHtml(feedback)}`,
+        '',
+        'The worker will push changes to the existing PR branch.',
+      ].join('\n'),
+      { parse_mode: 'HTML' },
+    )
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    await ctx.reply(
+      `\u{274C} Failed to queue revision: <code>${escapeHtml(msg)}</code>`,
+      { parse_mode: 'HTML' },
+    )
+  }
+})
+
 bot.command('task', async (ctx: Context) => {
   const text = ctx.message?.text ?? ''
   // Parse: /task <repo_url> <description...>
@@ -230,8 +337,72 @@ bot.command('task', async (ctx: Context) => {
     return
   }
 
-  const repoUrl = parts[1]
+  const urlArg = parts[1]
   const description = parts.slice(2).join(' ')
+
+  // Detect PR URL — treat as revision of that PR
+  const prInfo = parsePrUrl(urlArg)
+  if (prInfo) {
+    if (description.length < 5) {
+      await ctx.reply('Please provide feedback for the PR revision (at least 5 characters).')
+      return
+    }
+
+    const ack = await ctx.reply(
+      `\u{1F504} Detected PR #${prInfo.prNumber}. Queuing revision...`,
+      { parse_mode: 'HTML' },
+    )
+
+    try {
+      // Look up the PR's head branch via GitHub API
+      const { execFileSync } = await import('child_process')
+      const env: Record<string, string> = {
+        PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin',
+        HOME: process.env.HOME || '/home/wright',
+      }
+      if (GITHUB_TOKEN) env.GH_TOKEN = GITHUB_TOKEN
+
+      const nwo = prInfo.repoUrl.replace('https://github.com/', '')
+      const headRef = execFileSync(
+        'gh',
+        ['api', `repos/${nwo}/pulls/${prInfo.prNumber}`, '--jq', '.head.ref'],
+        { encoding: 'utf-8', env },
+      ).trim()
+
+      const job = await insertJob({
+        repoUrl: prInfo.repoUrl,
+        task: description,
+        chatId: ctx.chat!.id,
+        messageId: ack.message_id,
+        githubToken: GITHUB_TOKEN,
+        featureBranch: headRef,
+      })
+
+      await ctx.reply(
+        [
+          '\u{1F504} <b>PR revision queued!</b>',
+          '',
+          `<b>Job ID:</b> <code>${job.id}</code>`,
+          `<b>PR:</b> #${prInfo.prNumber}`,
+          `<b>Branch:</b> <code>${headRef}</code>`,
+          `<b>Feedback:</b> ${escapeHtml(description)}`,
+          '',
+          'The worker will push changes to the existing PR branch.',
+        ].join('\n'),
+        { parse_mode: 'HTML' },
+      )
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      await ctx.reply(
+        `\u{274C} Failed to queue PR revision: <code>${escapeHtml(msg)}</code>`,
+        { parse_mode: 'HTML' },
+      )
+    }
+    return
+  }
+
+  // Normal task: repo URL + description
+  const repoUrl = urlArg
 
   if (!isValidRepoUrl(repoUrl)) {
     await ctx.reply(
@@ -369,6 +540,87 @@ bot.command('cancel', async (ctx: Context) => {
     const msg = err instanceof Error ? err.message : String(err)
     await ctx.reply(
       `\u{274C} Error cancelling job: <code>${escapeHtml(msg)}</code>`,
+      { parse_mode: 'HTML' },
+    )
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Reply-based revision — reply to any job message to revise the PR
+// ---------------------------------------------------------------------------
+
+bot.on('message:text', async (ctx, next) => {
+  const reply = ctx.message.reply_to_message
+  // Only handle replies to bot messages that contain a job ID
+  if (!reply || reply.from?.id !== ctx.me.id) {
+    return next()
+  }
+
+  const replyText = reply.text || reply.caption || ''
+  const jobIdPrefix = extractJobIdFromMessage(replyText)
+  if (!jobIdPrefix) return next()
+
+  const feedback = ctx.message.text
+  // Ignore commands — let command handlers take care of those
+  if (feedback.startsWith('/')) return next()
+
+  if (feedback.length < 5) {
+    await ctx.reply('Please provide more detailed feedback (at least 5 characters).')
+    return
+  }
+
+  try {
+    // Look up the original job — try full ID first, then prefix match
+    let originalJob = await getJob(jobIdPrefix)
+    if (!originalJob) {
+      // jobIdPrefix might be 8-char short ID — try looking up via Supabase LIKE
+      // For now, reply with an error
+      await ctx.reply(
+        `Could not find job <code>${escapeHtml(jobIdPrefix)}</code>. `
+          + 'Use <code>/revise &lt;job_id&gt; &lt;feedback&gt;</code> with the full job ID.',
+        { parse_mode: 'HTML' },
+      )
+      return
+    }
+
+    if (!originalJob.pr_url) {
+      await ctx.reply('That job has no PR yet. Cannot revise.')
+      return
+    }
+
+    const featureBranch = originalJob.feature_branch || `wright/${originalJob.id.slice(0, 8)}`
+
+    const ack = await ctx.reply(
+      `\u{1F504} Queuing revision for <code>${featureBranch}</code> based on your reply...`,
+      { parse_mode: 'HTML' },
+    )
+
+    const job = await insertJob({
+      repoUrl: originalJob.repo_url,
+      task: feedback,
+      chatId: ctx.chat!.id,
+      messageId: ack.message_id,
+      githubToken: GITHUB_TOKEN,
+      branch: originalJob.branch,
+      featureBranch,
+      parentJobId: originalJob.id,
+    })
+
+    await ctx.reply(
+      [
+        '\u{1F504} <b>Revision queued from reply!</b>',
+        '',
+        `<b>Job ID:</b> <code>${job.id}</code>`,
+        `<b>Revising:</b> <code>${originalJob.id.slice(0, 8)}</code>`,
+        `<b>Branch:</b> <code>${featureBranch}</code>`,
+        `<b>Feedback:</b> ${escapeHtml(feedback.slice(0, 200))}`,
+      ].join('\n'),
+      { parse_mode: 'HTML' },
+    )
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    await ctx.reply(
+      `\u{274C} Failed to queue revision: <code>${escapeHtml(msg)}</code>`,
       { parse_mode: 'HTML' },
     )
   }

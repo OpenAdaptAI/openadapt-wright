@@ -50,6 +50,10 @@ export interface InsertJobParams {
   branch?: string
   maxLoops?: number
   maxBudgetUsd?: number
+  /** For revision jobs: the existing feature branch to push to */
+  featureBranch?: string
+  /** For revision jobs: the parent job ID being revised */
+  parentJobId?: string
 }
 
 /**
@@ -60,20 +64,24 @@ export interface InsertJobParams {
 export async function insertJob(params: InsertJobParams): Promise<Job> {
   const sb = getSupabase()
 
+  const row: Record<string, unknown> = {
+    repo_url: params.repoUrl,
+    task: params.task,
+    branch: params.branch ?? 'main',
+    max_loops: params.maxLoops ?? DEFAULT_MAX_LOOPS,
+    max_budget_usd: params.maxBudgetUsd ?? DEFAULT_MAX_BUDGET_USD,
+    status: JOB_STATUS.QUEUED,
+    total_cost_usd: 0,
+    github_token: params.githubToken,
+    telegram_chat_id: params.chatId,
+    telegram_message_id: params.messageId,
+  }
+  if (params.featureBranch) row.feature_branch = params.featureBranch
+  if (params.parentJobId) row.parent_job_id = params.parentJobId
+
   const { data, error } = await sb
     .from(TABLES.JOB_QUEUE)
-    .insert({
-      repo_url: params.repoUrl,
-      task: params.task,
-      branch: params.branch ?? 'main',
-      max_loops: params.maxLoops ?? DEFAULT_MAX_LOOPS,
-      max_budget_usd: params.maxBudgetUsd ?? DEFAULT_MAX_BUDGET_USD,
-      status: JOB_STATUS.QUEUED,
-      total_cost_usd: 0,
-      github_token: params.githubToken,
-      telegram_chat_id: params.chatId,
-      telegram_message_id: params.messageId,
-    })
+    .insert(row)
     .select()
     .single()
 
