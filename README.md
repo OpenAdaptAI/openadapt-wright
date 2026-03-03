@@ -8,19 +8,11 @@ Submit a task via Telegram, watch Wright clone the repo, edit code, run tests, a
 
 ### Desktop
 
-| Task Submission | Progress Events | Job Completed | GitHub PR |
-|:-:|:-:|:-:|:-:|
-| ![Task submission](docs/screenshots/desktop-01-task-submit.png) | ![Progress events](docs/screenshots/desktop-02-progress-events.png) | ![Job completed](docs/screenshots/desktop-03-job-completed.png) | ![GitHub PR](docs/screenshots/desktop-04-github-pr.png) |
+![Desktop demo — task submission, progress, completion, and GitHub PR](docs/screenshots/demo-desktop.webp)
 
 ### Mobile
 
-| Task Submission | Progress Events | Job Completed |
-|:-:|:-:|:-:|
-| ![Task submission](docs/screenshots/mobile-01-task-submit.png) | ![Progress events](docs/screenshots/mobile-03-progress-events.png) | ![Job completed](docs/screenshots/mobile-04-job-completed.png) |
-
-| Task Command | PR Results | PR Summary |
-|:-:|:-:|:-:|
-| ![Task command](docs/screenshots/mobile-02-task-command.png) | ![PR results](docs/screenshots/mobile-05-pr-results.png) | ![PR summary](docs/screenshots/mobile-06-pr-summary.png) |
+![Mobile demo — task submission, progress, completion, and PR review](docs/screenshots/demo-mobile.webp)
 
 ## Test Results
 
