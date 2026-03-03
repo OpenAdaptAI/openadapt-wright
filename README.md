@@ -2,6 +2,26 @@
 
 Wright is a generalized dev automation platform that takes task descriptions, uses the Claude Agent SDK to generate code, runs tests iteratively (the Ralph Loop pattern), and creates pull requests -- with a Telegram bot for human-in-the-loop approval.
 
+## Demo
+
+Submit a task via Telegram, watch Wright clone the repo, edit code, run tests, and create a PR -- all automated.
+
+### Desktop
+
+| Task Submission | Progress Events | Job Completed | GitHub PR |
+|:-:|:-:|:-:|:-:|
+| ![Task submission](docs/screenshots/desktop-01-task-submit.png) | ![Progress events](docs/screenshots/desktop-02-progress-events.png) | ![Job completed](docs/screenshots/desktop-03-job-completed.png) | ![GitHub PR](docs/screenshots/desktop-04-github-pr.png) |
+
+### Mobile
+
+| Task Submission | Progress Events | Job Completed |
+|:-:|:-:|:-:|
+| ![Task submission](docs/screenshots/mobile-01-task-submit.png) | ![Progress events](docs/screenshots/mobile-03-progress-events.png) | ![Job completed](docs/screenshots/mobile-04-job-completed.png) |
+
+| Task Command | PR Results | PR Summary |
+|:-:|:-:|:-:|
+| ![Task command](docs/screenshots/mobile-02-task-command.png) | ![PR results](docs/screenshots/mobile-05-pr-results.png) | ![PR summary](docs/screenshots/mobile-06-pr-summary.png) |
+
 ## Test Results
 
 **53 tests passing** across 6 test suites, covering the full pipeline from detection to dev loop execution.
