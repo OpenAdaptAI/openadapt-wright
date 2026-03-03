@@ -40,6 +40,18 @@ if (!GITHUB_TOKEN) {
 const bot = new Bot(BOT_TOKEN)
 
 // ---------------------------------------------------------------------------
+// Notification mode: 'verbose' (default) or 'quiet', keyed by chat ID
+// ---------------------------------------------------------------------------
+
+const chatNotifyMode = new Map<number, 'verbose' | 'quiet'>()
+
+/** Events that are skipped entirely in quiet mode. */
+const QUIET_EVENTS = new Set(['edit', 'test_run', 'cloned'])
+
+/** Events that always deliver with notification sound regardless of mode. */
+const LOUD_EVENTS = new Set(['pr_created', 'completed'])
+
+// ---------------------------------------------------------------------------
 // Authorization middleware — restrict to known Telegram users
 // ---------------------------------------------------------------------------
 
@@ -176,10 +188,28 @@ bot.command('start', async (ctx: Context) => {
       '/task &lt;repo_url&gt; &lt;description&gt; -- Submit a dev task',
       '/status &lt;job_id&gt; -- Check job status',
       '/cancel &lt;job_id&gt; -- Cancel a running job',
+      '/verbose -- Enable all event notifications (default)',
+      '/quiet -- Only send milestone notifications; silence noisy events',
       '',
       'When a PR is ready, I will send approve/reject buttons.',
     ].join('\n'),
     { parse_mode: 'HTML' },
+  )
+})
+
+bot.command('verbose', async (ctx: Context) => {
+  const chatId = ctx.chat!.id
+  chatNotifyMode.set(chatId, 'verbose')
+  await ctx.reply('\u{1F50A} Verbose mode enabled. You will receive all event notifications.')
+})
+
+bot.command('quiet', async (ctx: Context) => {
+  const chatId = ctx.chat!.id
+  chatNotifyMode.set(chatId, 'quiet')
+  await ctx.reply(
+    '\u{1F514} Quiet mode enabled. '
+      + 'Only milestone notifications (loop start, test results, PR created, completed, errors) will be sent. '
+      + 'Noisy events (edits, test runs, cloned) are silenced.',
   )
 })
 
@@ -431,17 +461,28 @@ function startRealtimeBridge(): void {
       const job = await getJob(event.job_id)
       if (!job?.telegram_chat_id) return
 
+      const chatId = job.telegram_chat_id
+      const mode = chatNotifyMode.get(chatId) ?? 'verbose'
+
+      // In quiet mode, skip noisy events entirely
+      if (mode === 'quiet' && QUIET_EVENTS.has(event.event_type)) return
+
       const text = `<b>[${job.id.slice(0, 8)}]</b> ${formatJobEvent(event)}`
+
+      // In quiet mode, deliver silently unless this is a loud event
+      const disableNotification = mode === 'quiet' && !LOUD_EVENTS.has(event.event_type)
 
       // PR created events get the approval keyboard
       if (event.event_type === 'pr_created' && job.pr_url) {
-        await bot.api.sendMessage(job.telegram_chat_id, text, {
+        await bot.api.sendMessage(chatId, text, {
           parse_mode: 'HTML',
           reply_markup: buildPrKeyboard(job.id, job.pr_url),
+          disable_notification: disableNotification,
         })
       } else {
-        await bot.api.sendMessage(job.telegram_chat_id, text, {
+        await bot.api.sendMessage(chatId, text, {
           parse_mode: 'HTML',
+          disable_notification: disableNotification,
         })
       }
     } catch (err) {
@@ -458,16 +499,21 @@ function startRealtimeBridge(): void {
     if (!terminal.includes(job.status)) return
 
     try {
+      const chatId = job.telegram_chat_id
+      const mode = chatNotifyMode.get(chatId) ?? 'verbose'
       const text = formatJobStatus(job)
 
       if (job.pr_url && job.status === JOB_STATUS.SUCCEEDED) {
-        await bot.api.sendMessage(job.telegram_chat_id, text, {
+        await bot.api.sendMessage(chatId, text, {
           parse_mode: 'HTML',
           reply_markup: buildPrKeyboard(job.id, job.pr_url),
         })
       } else {
-        await bot.api.sendMessage(job.telegram_chat_id, text, {
+        // Terminal failure: respect quiet mode (silent delivery)
+        const disableNotification = mode === 'quiet' && job.status === JOB_STATUS.FAILED
+        await bot.api.sendMessage(chatId, text, {
           parse_mode: 'HTML',
+          disable_notification: disableNotification,
         })
       }
     } catch (err) {
