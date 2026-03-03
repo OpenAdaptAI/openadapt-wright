@@ -16,8 +16,20 @@ import { detectTestRunner, detectPackageManager, installDependencies, runTests }
 import { runClaudeSession } from './claude-session.js'
 import { existsSync, rmSync, mkdirSync } from 'fs'
 
+/**
+ * Strip Telegram HTML-like formatting delimiters (e.g. `<b>`, `</b>`, `<code>`) from
+ * raw message text so they don't leak into prompts, PR bodies, or commit messages.
+ */
+function sanitizeTaskText(text: string): string {
+  return text.replace(/<\/?[^>]+>/g, '').trim()
+}
+
 export async function runDevLoop(config: DevLoopConfig): Promise<DevLoopResult> {
   const { job } = config
+  // Sanitize task text early so all downstream uses (prompts, PR body, commit messages)
+  // receive clean text without Telegram formatting delimiters.
+  job.task = sanitizeTaskText(job.task)
+
   const maxLoops = job.max_loops
   const maxBudget = job.max_budget_usd
   const maxTurns = config.maxTurnsPerLoop || DEFAULT_MAX_TURNS_PER_LOOP
@@ -195,7 +207,7 @@ export async function runDevLoop(config: DevLoopConfig): Promise<DevLoopResult> 
       })
 
       const eventType =
-        lastTestResults.failed === 0 && lastTestResults.total > 0
+        lastTestResults.failed === 0 && lastTestResults.errors === 0
           ? 'test_pass'
           : 'test_fail'
       await emit(supabase, job.id, eventType, loop, {
@@ -230,7 +242,7 @@ export async function runDevLoop(config: DevLoopConfig): Promise<DevLoopResult> 
 
       // 5c. Check pass
       allTestsPassed =
-        lastTestResults.failed === 0 && lastTestResults.total > 0
+        lastTestResults.failed === 0 && lastTestResults.errors === 0
     }
 
     // 6. Commit and push
@@ -238,7 +250,7 @@ export async function runDevLoop(config: DevLoopConfig): Promise<DevLoopResult> 
       ? `feat: ${job.task.slice(0, 60)}`
       : `wip: ${job.task.slice(0, 60)} (${lastTestResults.passed}/${lastTestResults.total} tests passing)`
 
-    const commitSha = await commitAndPush(workDir, commitMessage)
+    const commitSha = await commitAndPush(workDir, commitMessage, job.github_token)
 
     // 7. Create PR
     let prUrl: string | undefined
@@ -248,6 +260,7 @@ export async function runDevLoop(config: DevLoopConfig): Promise<DevLoopResult> 
         job.task.slice(0, 70),
         buildPrBody(job.task, lastTestResults, loopsCompleted, totalCost),
         job.branch,
+        job.github_token,
       )
       await emit(supabase, job.id, 'pr_created', undefined, { prUrl })
     } catch (err) {
@@ -304,12 +317,19 @@ ${workDir}
 - Dependencies are already installed
 
 ## Rules
-1. Make changes to implement the requested task
-2. After making changes, run tests to verify they pass
-3. If tests fail, fix the code (not the tests) unless the tests are clearly wrong
-4. Keep changes minimal and focused on the task
-5. Do not refactor unrelated code
-6. Do not add unnecessary dependencies`
+1. Make changes to implement the requested task.
+2. After making changes, run tests to verify they pass.
+3. If tests fail, fix the code (not the tests) unless the tests are clearly wrong.
+4. Keep changes minimal and focused ONLY on the files directly required by the task.
+5. Do not refactor unrelated code.
+6. Do not add unnecessary dependencies.
+
+## Hard constraints — NEVER violate these
+- NEVER modify test files unless the task explicitly asks for test changes.
+- NEVER modify package manifests (package.json, pyproject.toml, Cargo.toml, go.mod, setup.py, setup.cfg, etc.) unless the task explicitly requires adding or removing a dependency.
+- NEVER modify lock files (uv.lock, pnpm-lock.yaml, package-lock.json, yarn.lock, Cargo.lock, poetry.lock, etc.) under any circumstances.
+- If the task is about documentation (README, docs/, *.md), ONLY modify documentation files. Do NOT touch source code, tests, or manifests.
+- When in doubt about whether a file is in scope, leave it unchanged.`
 }
 
 function buildInitialPrompt(

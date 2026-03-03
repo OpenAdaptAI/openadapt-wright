@@ -1,0 +1,16 @@
+# Fly.io configuration for the wright Telegram bot
+# Long-polling bot — no HTTP service needed, just a persistent process
+
+app = "wright-bot"
+primary_region = "ord"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+
+[[vm]]
+  memory = "256mb"
+  cpu_kind = "shared"
+  cpus = 1
