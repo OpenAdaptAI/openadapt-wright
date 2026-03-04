@@ -50,6 +50,11 @@ export interface Job {
   /** GitHub token for repo access */
   github_token: string
 
+  /** For revision jobs: the existing feature branch to push to (e.g. wright/14da897c) */
+  feature_branch?: string
+  /** For revision jobs: the ID of the original job this is revising */
+  parent_job_id?: string
+
   // Telegram integration
   telegram_chat_id?: number
   telegram_message_id?: number

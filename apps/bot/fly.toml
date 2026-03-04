@@ -1,5 +1,7 @@
 # Fly.io configuration for the wright Telegram bot
 # Long-polling bot — no HTTP service needed, just a persistent process
+#
+# Deploy from repo root:  fly deploy -c apps/bot/fly.toml
 
 app = "wright-bot"
 primary_region = "ord"

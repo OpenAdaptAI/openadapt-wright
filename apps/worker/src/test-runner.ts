@@ -4,6 +4,28 @@ import { join } from 'path'
 import type { TestRunner, PackageManager, TestResults, TestFailure } from '@wright/shared'
 
 /**
+ * Build a minimal env for subprocess execution, avoiding leaking secrets
+ * (SUPABASE_SERVICE_ROLE_KEY, ANTHROPIC_API_KEY, BOT_TOKEN, etc.).
+ */
+const SAFE_ENV_KEYS = [
+  'PATH', 'HOME', 'USER', 'SHELL', 'TERM', 'LANG', 'LC_ALL',
+  'TMPDIR', 'TMP', 'TEMP',
+  'NODE_ENV', 'WORKSPACE_DIR',
+  // Language-specific runtime env
+  'GOPATH', 'GOROOT', 'CARGO_HOME', 'RUSTUP_HOME',
+  'VIRTUAL_ENV', 'PYTHONPATH',
+  'NODE_PATH', 'NPM_CONFIG_PREFIX',
+]
+
+function getSafeEnv(): Record<string, string> {
+  const env: Record<string, string> = {}
+  for (const key of SAFE_ENV_KEYS) {
+    if (process.env[key]) env[key] = process.env[key]!
+  }
+  return env
+}
+
+/**
  * Auto-detect the test runner from repo files.
  */
 export function detectTestRunner(workDir: string): TestRunner {
@@ -94,7 +116,7 @@ export function installDependencies(workDir: string, pm: PackageManager): void {
 
   console.log(`[test-runner] Installing dependencies with ${pm}: ${cmd}`)
   try {
-    execSync(cmd, { cwd: workDir, stdio: 'pipe', timeout: 300_000 })
+    execSync(cmd, { cwd: workDir, stdio: 'pipe', timeout: 300_000, env: getSafeEnv() })
   } catch (err) {
     const stderr = err && typeof err === 'object' && 'stderr' in err
       ? String((err as { stderr: unknown }).stderr).slice(-2000)
@@ -149,6 +171,7 @@ export function runTests(
       encoding: 'utf-8',
       timeout: timeoutSeconds * 1000,
       stdio: ['pipe', 'pipe', 'pipe'],
+      env: getSafeEnv(),
     })
   } catch (err) {
     if (err && typeof err === 'object' && 'stdout' in err) {

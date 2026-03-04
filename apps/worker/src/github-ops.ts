@@ -35,6 +35,20 @@ export async function createFeatureBranch(
   return branchName
 }
 
+/**
+ * Check out an existing remote branch (e.g. for revision jobs that push to
+ * an already-open PR's branch).
+ */
+export async function checkoutExistingBranch(
+  workDir: string,
+  branchName: string,
+): Promise<string> {
+  const git = simpleGit(workDir)
+  await git.fetch('origin', branchName)
+  await git.checkout(branchName)
+  return branchName
+}
+
 export async function commitAndPush(workDir: string, message: string, githubToken?: string): Promise<string> {
   const git = simpleGit(workDir)
 
