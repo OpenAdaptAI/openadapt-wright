@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { detectTestRunner, detectPackageManager, runTests } from '../test-runner.js'
+import { detectTestRunner, detectPackageManager, detectMonorepo, runTests } from '../test-runner.js'
 
 // Helper: create a temp directory with specific files
 function createTempDir(): string {
@@ -204,6 +204,43 @@ describe('detectPackageManager', () => {
     touchFile(tempDir, 'pnpm-lock.yaml')
     touchFile(tempDir, 'package.json', '{}')
     expect(detectPackageManager(tempDir)).toBe('pnpm')
+  })
+})
+
+describe('detectMonorepo', () => {
+  let tempDir: string
+
+  beforeEach(() => {
+    tempDir = createTempDir()
+  })
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true })
+  })
+
+  it('detects turborepo from turbo.json', () => {
+    touchFile(tempDir, 'turbo.json', '{"pipeline":{}}')
+    expect(detectMonorepo(tempDir)).toBe('turborepo')
+  })
+
+  it('detects pnpm-workspace from pnpm-workspace.yaml', () => {
+    touchFile(tempDir, 'pnpm-workspace.yaml', 'packages:\n  - "apps/*"')
+    expect(detectMonorepo(tempDir)).toBe('pnpm-workspace')
+  })
+
+  it('returns none for a plain repo', () => {
+    touchFile(tempDir, 'package.json', '{}')
+    expect(detectMonorepo(tempDir)).toBe('none')
+  })
+
+  it('returns none for an empty directory', () => {
+    expect(detectMonorepo(tempDir)).toBe('none')
+  })
+
+  it('prioritizes turborepo when both turbo.json and pnpm-workspace.yaml exist', () => {
+    touchFile(tempDir, 'turbo.json', '{"pipeline":{}}')
+    touchFile(tempDir, 'pnpm-workspace.yaml', 'packages:\n  - "apps/*"')
+    expect(detectMonorepo(tempDir)).toBe('turborepo')
   })
 })
 

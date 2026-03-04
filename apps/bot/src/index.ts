@@ -185,15 +185,63 @@ function extractJobIdFromMessage(text: string): string | null {
 }
 
 /**
- * Parse a GitHub PR URL into its components.
- * Returns null if the URL is not a valid PR URL.
+ * Parse a GitHub PR URL into its owner, repo, and PR number components.
+ *
+ * Accepts URLs like: https://github.com/owner/repo/pull/123
  */
-function parsePrUrl(url: string): { repoUrl: string; prNumber: number } | null {
-  const match = url.match(/^https?:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/)
+function parsePrUrl(prUrl: string): { owner: string; repo: string; number: number } | null {
+  const match = prUrl.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/)
   if (!match) return null
-  return {
-    repoUrl: `https://github.com/${match[1]}`,
-    prNumber: parseInt(match[2], 10),
+  return { owner: match[1], repo: match[2], number: parseInt(match[3], 10) }
+}
+
+/**
+ * Merge a pull request via the GitHub REST API.
+ */
+async function mergePullRequest(owner: string, repo: string, prNumber: number): Promise<void> {
+  const res = await fetch(
+    `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/merge`,
+    {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${GITHUB_TOKEN}`,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+      body: JSON.stringify({
+        merge_method: 'squash',
+      }),
+    },
+  )
+
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(`GitHub merge failed (${res.status}): ${body}`)
+  }
+}
+
+/**
+ * Close a pull request via the GitHub REST API (without merging).
+ */
+async function closePullRequest(owner: string, repo: string, prNumber: number): Promise<void> {
+  const res = await fetch(
+    `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}`,
+    {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${GITHUB_TOKEN}`,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+      body: JSON.stringify({
+        state: 'closed',
+      }),
+    },
+  )
+
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(`GitHub close failed (${res.status}): ${body}`)
   }
 }
 
@@ -352,7 +400,7 @@ bot.command('task', async (ctx: Context) => {
     }
 
     const ack = await ctx.reply(
-      `\u{1F504} Detected PR #${prInfo.prNumber}. Queuing revision...`,
+      `\u{1F504} Detected PR #${prInfo.number}. Queuing revision...`,
       { parse_mode: 'HTML' },
     )
 
@@ -364,10 +412,10 @@ bot.command('task', async (ctx: Context) => {
       }
       if (GITHUB_TOKEN) ghEnv.GH_TOKEN = GITHUB_TOKEN
 
-      const nwo = prInfo.repoUrl.replace('https://github.com/', '')
+      const nwo = `${prInfo.owner}/${prInfo.repo}`
       const headRef = execFileSync(
         'gh',
-        ['api', `repos/${nwo}/pulls/${prInfo.prNumber}`, '--jq', '.head.ref'],
+        ['api', `repos/${nwo}/pulls/${prInfo.number}`, '--jq', '.head.ref'],
         { encoding: 'utf-8', env: ghEnv },
       ).trim()
 
@@ -384,7 +432,7 @@ bot.command('task', async (ctx: Context) => {
       const parentJobId = parentJobs?.[0]?.id
 
       const job = await insertJob({
-        repoUrl: prInfo.repoUrl,
+        repoUrl: `https://github.com/${prInfo.owner}/${prInfo.repo}`,
         task: description,
         chatId: ctx.chat!.id,
         messageId: ack.message_id,
@@ -398,7 +446,7 @@ bot.command('task', async (ctx: Context) => {
           '\u{1F504} <b>PR revision queued!</b>',
           '',
           `<b>Job ID:</b> <code>${job.id}</code>`,
-          `<b>PR:</b> #${prInfo.prNumber}`,
+          `<b>PR:</b> #${prInfo.number}`,
           `<b>Branch:</b> <code>${headRef}</code>`,
           `<b>Feedback:</b> ${escapeHtml(description)}`,
           '',
@@ -652,17 +700,24 @@ bot.callbackQuery(/^approve:(.+)$/, async (ctx) => {
       return
     }
 
-    // In a full implementation this would call the GitHub API to merge.
-    // For now, acknowledge the action and provide the PR link.
-    await ctx.answerCallbackQuery({ text: 'Approval noted!' })
+    const parsed = parsePrUrl(job.pr_url)
+    if (!parsed) {
+      await ctx.answerCallbackQuery({ text: 'Could not parse PR URL.' })
+      return
+    }
+
+    await ctx.answerCallbackQuery({ text: 'Merging PR...' })
+
+    await mergePullRequest(parsed.owner, parsed.repo, parsed.number)
+
     await ctx.editMessageText(
       [
-        `\u{2705} <b>PR approved for merge</b>`,
+        `\u{2705} <b>PR merged successfully</b>`,
         '',
         `<b>Job:</b> <code>${job.id.slice(0, 8)}</code>`,
         `<b>PR:</b> ${job.pr_url}`,
         '',
-        'The PR merge has been initiated.',
+        `Merged <code>${parsed.owner}/${parsed.repo}#${parsed.number}</code> via squash merge.`,
       ].join('\n'),
       { parse_mode: 'HTML' },
     )
@@ -685,8 +740,16 @@ bot.callbackQuery(/^reject:(.+)$/, async (ctx) => {
       return
     }
 
-    // In a full implementation this would call the GitHub API to close the PR.
-    await ctx.answerCallbackQuery({ text: 'PR rejected.' })
+    const parsed = parsePrUrl(job.pr_url)
+    if (!parsed) {
+      await ctx.answerCallbackQuery({ text: 'Could not parse PR URL.' })
+      return
+    }
+
+    await ctx.answerCallbackQuery({ text: 'Closing PR...' })
+
+    await closePullRequest(parsed.owner, parsed.repo, parsed.number)
+
     await ctx.editMessageText(
       [
         `\u{274C} <b>PR rejected and closed</b>`,
@@ -694,7 +757,7 @@ bot.callbackQuery(/^reject:(.+)$/, async (ctx) => {
         `<b>Job:</b> <code>${job.id.slice(0, 8)}</code>`,
         `<b>PR:</b> ${job.pr_url}`,
         '',
-        'The PR has been closed without merging.',
+        `Closed <code>${parsed.owner}/${parsed.repo}#${parsed.number}</code> without merging.`,
       ].join('\n'),
       { parse_mode: 'HTML' },
     )

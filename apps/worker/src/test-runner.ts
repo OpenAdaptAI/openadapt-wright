@@ -26,6 +26,46 @@ function getSafeEnv(): Record<string, string> {
 }
 
 /**
+ * Monorepo layout type, if detected.
+ */
+export type MonorepoType = 'turborepo' | 'pnpm-workspace' | 'none'
+
+/**
+ * Auto-detect whether the repo is a monorepo and what kind.
+ *
+ * Detection order:
+ *   1. turbo.json exists -> Turborepo (uses `pnpm turbo test` or `npx turbo test`)
+ *   2. pnpm-workspace.yaml exists (without turbo) -> pnpm workspace (`pnpm -r test`)
+ *   3. Neither -> single repo
+ */
+export function detectMonorepo(workDir: string): MonorepoType {
+  if (existsSync(join(workDir, 'turbo.json'))) {
+    return 'turborepo'
+  }
+  if (existsSync(join(workDir, 'pnpm-workspace.yaml'))) {
+    return 'pnpm-workspace'
+  }
+  return 'none'
+}
+
+/**
+ * Build the test command for a monorepo layout.
+ * Returns null if the repo is not a monorepo (caller should fall back to
+ * the per-runner command).
+ */
+function getMonorepoTestCommand(monorepo: MonorepoType, pm: PackageManager): string | null {
+  switch (monorepo) {
+    case 'turborepo':
+      // Prefer pnpm turbo when pnpm is the package manager; otherwise npx
+      return pm === 'pnpm' ? 'pnpm turbo test' : 'npx turbo test'
+    case 'pnpm-workspace':
+      return 'pnpm -r test'
+    default:
+      return null
+  }
+}
+
+/**
  * Auto-detect the test runner from repo files.
  */
 export function detectTestRunner(workDir: string): TestRunner {
@@ -150,14 +190,22 @@ function getTestCommand(runner: TestRunner, pm: PackageManager): string {
 
 /**
  * Run the test suite and return structured results.
+ *
+ * When `monorepo` is provided (or auto-detected), the function uses the
+ * appropriate monorepo test orchestration command instead of the single-
+ * runner command.
  */
 export function runTests(
   workDir: string,
   runner: TestRunner,
   pm: PackageManager,
   timeoutSeconds: number,
+  monorepo?: MonorepoType,
 ): TestResults {
-  const command = getTestCommand(runner, pm)
+  // Auto-detect monorepo if not explicitly provided
+  const mono = monorepo ?? detectMonorepo(workDir)
+  const monorepoCommand = getMonorepoTestCommand(mono, pm)
+  const command = monorepoCommand ?? getTestCommand(runner, pm)
   const startTime = Date.now()
 
   console.log(`[test-runner] Running: ${command}`)
