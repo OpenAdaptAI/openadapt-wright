@@ -114,6 +114,27 @@ export async function getJob(jobId: string): Promise<Job | null> {
 }
 
 /**
+ * Fetch a job by an 8-char ID prefix. Returns null if not found or ambiguous.
+ */
+export async function getJobByPrefix(prefix: string): Promise<Job | null> {
+  const sb = getSupabase()
+
+  const { data, error } = await sb
+    .from(TABLES.JOB_QUEUE)
+    .select('*')
+    .like('id', `${prefix}%`)
+    .limit(2)
+
+  if (error) {
+    throw new Error(`Failed to fetch job by prefix: ${error.message}`)
+  }
+
+  // Return null if no match or ambiguous (multiple matches)
+  if (!data || data.length !== 1) return null
+  return data[0] as Job
+}
+
+/**
  * Attempt to cancel a job by setting its status to 'failed' with a
  * cancellation error. Only queued or running jobs can be cancelled.
  *

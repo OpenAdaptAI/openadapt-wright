@@ -6,11 +6,13 @@
  * keyboard buttons for approve / reject.
  */
 
+import { execFileSync } from 'child_process'
 import { Bot, InlineKeyboard, type Context } from 'grammy'
 import { JOB_STATUS, type Job, type JobEvent } from '@wright/shared'
 import {
   insertJob,
   getJob,
+  getJobByPrefix,
   cancelJob,
   getJobEvents,
   subscribeToJobEvents,
@@ -43,6 +45,7 @@ const bot = new Bot(BOT_TOKEN)
 // Notification mode: 'verbose' (default) or 'quiet', keyed by chat ID
 // ---------------------------------------------------------------------------
 
+// TODO: persist to Supabase so mode survives bot restarts
 const chatNotifyMode = new Map<number, 'verbose' | 'quiet'>()
 
 /** Events that are skipped entirely in quiet mode. */
@@ -265,7 +268,7 @@ bot.command('revise', async (ctx: Context) => {
 
   try {
     // Look up the original job — support both full UUID and 8-char prefix
-    const originalJob = await getJob(jobIdInput)
+    const originalJob = await getJob(jobIdInput) ?? await getJobByPrefix(jobIdInput)
     if (!originalJob) {
       await ctx.reply(
         `No job found with ID <code>${escapeHtml(jobIdInput)}</code>.`,
@@ -355,19 +358,30 @@ bot.command('task', async (ctx: Context) => {
 
     try {
       // Look up the PR's head branch via GitHub API
-      const { execFileSync } = await import('child_process')
-      const env: Record<string, string> = {
+      const ghEnv: Record<string, string> = {
         PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin',
         HOME: process.env.HOME || '/home/wright',
       }
-      if (GITHUB_TOKEN) env.GH_TOKEN = GITHUB_TOKEN
+      if (GITHUB_TOKEN) ghEnv.GH_TOKEN = GITHUB_TOKEN
 
       const nwo = prInfo.repoUrl.replace('https://github.com/', '')
       const headRef = execFileSync(
         'gh',
         ['api', `repos/${nwo}/pulls/${prInfo.prNumber}`, '--jq', '.head.ref'],
-        { encoding: 'utf-8', env },
+        { encoding: 'utf-8', env: ghEnv },
       ).trim()
+
+      // Try to find the original job that created this branch so we can link them
+      const { getSupabase } = await import('./supabase.js')
+      const sb = getSupabase()
+      const { data: parentJobs } = await sb
+        .from('job_queue')
+        .select('id')
+        .or(`feature_branch.eq.${headRef},id.like.${headRef.replace('wright/', '')}%`)
+        .not('pr_url', 'is', null)
+        .order('created_at', { ascending: false })
+        .limit(1)
+      const parentJobId = parentJobs?.[0]?.id
 
       const job = await insertJob({
         repoUrl: prInfo.repoUrl,
@@ -376,6 +390,7 @@ bot.command('task', async (ctx: Context) => {
         messageId: ack.message_id,
         githubToken: GITHUB_TOKEN,
         featureBranch: headRef,
+        parentJobId,
       })
 
       await ctx.reply(
@@ -571,13 +586,10 @@ bot.on('message:text', async (ctx, next) => {
 
   try {
     // Look up the original job — try full ID first, then prefix match
-    let originalJob = await getJob(jobIdPrefix)
+    const originalJob = await getJob(jobIdPrefix) ?? await getJobByPrefix(jobIdPrefix)
     if (!originalJob) {
-      // jobIdPrefix might be 8-char short ID — try looking up via Supabase LIKE
-      // For now, reply with an error
       await ctx.reply(
-        `Could not find job <code>${escapeHtml(jobIdPrefix)}</code>. `
-          + 'Use <code>/revise &lt;job_id&gt; &lt;feedback&gt;</code> with the full job ID.',
+        `Could not find job <code>${escapeHtml(jobIdPrefix)}</code>.`,
         { parse_mode: 'HTML' },
       )
       return
