@@ -1,6 +1,6 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import type { Job } from '@wright/shared'
-import { POLL_INTERVAL_MS, STALE_CLAIMED_MS, STALE_RUNNING_MS } from '@wright/shared'
+import { POLL_INTERVAL_MS, STALE_CLAIMED_MS, STALE_RUNNING_MS, HEARTBEAT_INTERVAL_MS } from '@wright/shared'
 import { runDevLoop } from './dev-loop.js'
 
 // Worker identity — use Fly machine ID if available, otherwise hostname
@@ -120,6 +120,7 @@ export async function requeueCurrentJob(): Promise<string | null> {
         worker_id: null,
         claimed_at: null,
         started_at: null,
+        heartbeat_at: null,
         attempt: job.attempt + 1,
         error: `Re-queued: worker shutdown (SIGTERM), attempt ${job.attempt + 1}/${job.max_attempts}`,
       })
@@ -141,6 +142,7 @@ export async function requeueCurrentJob(): Promise<string | null> {
       .update({
         status: 'failed',
         completed_at: new Date().toISOString(),
+        heartbeat_at: null,
         error: `Failed after ${job.max_attempts} attempts (worker restarts)`,
       })
       .eq('id', job.id)
@@ -237,13 +239,26 @@ async function processJob(job: Job): Promise<void> {
     `[queue-poller] Processing job ${job.id} (attempt ${job.attempt})`,
   )
 
+  // Start heartbeat interval — proves this worker is alive while processing
+  const heartbeatTimer = setInterval(async () => {
+    try {
+      await supabase!
+        .from('job_queue')
+        .update({ heartbeat_at: new Date().toISOString() })
+        .eq('id', job.id)
+    } catch (err) {
+      console.error(`[heartbeat] Failed to update heartbeat for ${job.id}:`, err)
+    }
+  }, HEARTBEAT_INTERVAL_MS)
+
   try {
-    // Mark as running
+    // Mark as running with initial heartbeat
     await supabase
       .from('job_queue')
       .update({
         status: 'running',
         started_at: new Date().toISOString(),
+        heartbeat_at: new Date().toISOString(),
       })
       .eq('id', job.id)
 
@@ -297,6 +312,7 @@ async function processJob(job: Job): Promise<void> {
       })
       .eq('id', job.id)
   } finally {
+    clearInterval(heartbeatTimer)
     if (onJobEnd) onJobEnd(job.id)
     currentJob = null
     currentAbortController = null
@@ -329,8 +345,50 @@ async function startupCleanup(): Promise<void> {
           status: 'queued',
           worker_id: null,
           claimed_at: null,
+          heartbeat_at: null,
         })
         .eq('id', job.id)
+    }
+  }
+
+  // 1b. Reset jobs still 'running' for this worker (interrupted by crash)
+  const { data: staleRunningThisWorker } = await supabase
+    .from('job_queue')
+    .select('id, attempt, max_attempts')
+    .eq('status', 'running')
+    .eq('worker_id', WORKER_ID)
+
+  if (staleRunningThisWorker && staleRunningThisWorker.length > 0) {
+    console.log(
+      `[queue-poller] Found ${staleRunningThisWorker.length} running job(s) from this worker (crash recovery)`,
+    )
+    for (const job of staleRunningThisWorker) {
+      if (job.attempt < job.max_attempts) {
+        await supabase
+          .from('job_queue')
+          .update({
+            status: 'queued',
+            worker_id: null,
+            claimed_at: null,
+            started_at: null,
+            heartbeat_at: null,
+            attempt: job.attempt + 1,
+            error: `Re-queued: worker crash recovery on startup (attempt ${job.attempt + 1}/${job.max_attempts})`,
+          })
+          .eq('id', job.id)
+        console.log(`[queue-poller] Re-queued running job ${job.id} (attempt ${job.attempt + 1}/${job.max_attempts})`)
+      } else {
+        await supabase
+          .from('job_queue')
+          .update({
+            status: 'failed',
+            completed_at: new Date().toISOString(),
+            heartbeat_at: null,
+            error: `Failed: worker crashed after ${job.max_attempts} attempts`,
+          })
+          .eq('id', job.id)
+        console.log(`[queue-poller] Job ${job.id} permanently failed (max attempts exceeded)`)
+      }
     }
   }
 
@@ -355,6 +413,7 @@ async function startupCleanup(): Promise<void> {
           status: 'queued',
           worker_id: null,
           claimed_at: null,
+          heartbeat_at: null,
           error: `Reset: claimed by ${job.worker_id} but never started`,
         })
         .eq('id', job.id)
@@ -384,6 +443,7 @@ async function startupCleanup(): Promise<void> {
             worker_id: null,
             claimed_at: null,
             started_at: null,
+            heartbeat_at: null,
             attempt: job.attempt + 1,
             error: `Re-queued: abandoned running job (attempt ${job.attempt + 1}/${job.max_attempts})`,
           })
@@ -394,6 +454,7 @@ async function startupCleanup(): Promise<void> {
           .update({
             status: 'failed',
             completed_at: new Date().toISOString(),
+            heartbeat_at: null,
             error: `Failed: abandoned after ${job.max_attempts} attempts`,
           })
           .eq('id', job.id)
