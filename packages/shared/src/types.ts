@@ -64,6 +64,7 @@ export interface Job {
   claimed_at?: string
   started_at?: string
   completed_at?: string
+  heartbeat_at?: string
 
   // Error details on failure
   error?: string

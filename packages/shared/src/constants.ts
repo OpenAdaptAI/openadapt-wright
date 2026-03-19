@@ -51,6 +51,25 @@ export const STALE_CLAIMED_MS = 2 * 60 * 1000  // 2 minutes
 export const STALE_RUNNING_MS = 30 * 60 * 1000  // 30 minutes
 
 /**
+ * How often the worker sends a heartbeat while processing a job (ms).
+ */
+export const HEARTBEAT_INTERVAL_MS = 30_000  // 30 seconds
+
+/**
+ * How long a running job can go without a heartbeat before being
+ * considered stale (ms). Must be > HEARTBEAT_INTERVAL_MS.
+ *
+ * Set to 3x the heartbeat interval to tolerate transient delays
+ * (slow DB writes, GC pauses, etc.)
+ */
+export const STALE_HEARTBEAT_MS = 90_000  // 90 seconds
+
+/**
+ * How often the bot checks for stale running jobs (ms).
+ */
+export const REAPER_INTERVAL_MS = 60_000  // 60 seconds
+
+/**
  * Supabase table names.
  */
 export const TABLES = {

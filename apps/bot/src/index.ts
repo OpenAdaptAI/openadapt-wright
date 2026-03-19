@@ -8,8 +8,9 @@
 
 import { execFileSync } from 'child_process'
 import { Bot, InlineKeyboard, type Context } from 'grammy'
-import { JOB_STATUS, type Job, type JobEvent } from '@wright/shared'
+import { JOB_STATUS, REAPER_INTERVAL_MS, STALE_HEARTBEAT_MS, STALE_CLAIMED_MS, type Job, type JobEvent } from '@wright/shared'
 import {
+  getSupabase,
   insertJob,
   getJob,
   getJobByPrefix,
@@ -890,6 +891,137 @@ bot.catch((err) => {
 })
 
 // ---------------------------------------------------------------------------
+// Stale job reaper — detects dead workers via heartbeat expiry
+// ---------------------------------------------------------------------------
+
+function startReaper(): void {
+  const sb = getSupabase()
+
+  setInterval(async () => {
+    try {
+      const cutoff = new Date(Date.now() - STALE_HEARTBEAT_MS).toISOString()
+
+      // Find running jobs with stale or missing heartbeats
+      const { data: staleJobs, error } = await sb
+        .from('job_queue')
+        .select('id, attempt, max_attempts, worker_id, telegram_chat_id, task, heartbeat_at, started_at')
+        .eq('status', 'running')
+        .or(`heartbeat_at.lt.${cutoff},and(heartbeat_at.is.null,started_at.lt.${cutoff})`)
+
+      if (error) {
+        console.error('[reaper] Query error:', error.message)
+        return
+      }
+
+      if (!staleJobs || staleJobs.length === 0) return
+
+      console.log(`[reaper] Found ${staleJobs.length} stale running job(s)`)
+
+      for (const job of staleJobs) {
+        if (job.attempt < job.max_attempts) {
+          // Re-queue for retry
+          const { data: updated } = await sb
+            .from('job_queue')
+            .update({
+              status: 'queued',
+              worker_id: null,
+              claimed_at: null,
+              started_at: null,
+              heartbeat_at: null,
+              attempt: job.attempt + 1,
+              error: `Re-queued by reaper: worker stopped responding (attempt ${job.attempt + 1}/${job.max_attempts})`,
+            })
+            .eq('id', job.id)
+            .eq('status', 'running')  // CAS: only if still running
+            .select('id')
+
+          if (updated && updated.length > 0) {
+            console.log(`[reaper] Re-queued job ${job.id} (attempt ${job.attempt + 1}/${job.max_attempts})`)
+
+            if (job.telegram_chat_id) {
+              try {
+                await bot.api.sendMessage(
+                  job.telegram_chat_id,
+                  `<b>[${job.id.slice(0, 8)}]</b> Worker stopped responding. `
+                    + `Re-queuing automatically (attempt ${job.attempt + 1}/${job.max_attempts}).`,
+                  { parse_mode: 'HTML' },
+                )
+              } catch {
+                // Best effort notification
+              }
+            }
+
+            wakeWorker()
+          }
+        } else {
+          // Max attempts exceeded — mark as permanently failed
+          const { data: updated } = await sb
+            .from('job_queue')
+            .update({
+              status: 'failed',
+              completed_at: new Date().toISOString(),
+              heartbeat_at: null,
+              error: `Failed: worker stopped responding after ${job.max_attempts} attempts`,
+            })
+            .eq('id', job.id)
+            .eq('status', 'running')  // CAS
+
+          if (updated && updated.length > 0) {
+            console.log(`[reaper] Job ${job.id} permanently failed (max attempts)`)
+
+            if (job.telegram_chat_id) {
+              try {
+                await bot.api.sendMessage(
+                  job.telegram_chat_id,
+                  `<b>[${job.id.slice(0, 8)}]</b> Worker stopped responding. `
+                    + `Job has failed permanently after ${job.max_attempts} attempts.`,
+                  { parse_mode: 'HTML' },
+                )
+              } catch {
+                // Best effort notification
+              }
+            }
+          }
+        }
+      }
+
+      // Also check for stale claimed jobs (worker died before transitioning to running)
+      const claimedCutoff = new Date(Date.now() - STALE_CLAIMED_MS).toISOString()
+      const { data: staleClaimed } = await sb
+        .from('job_queue')
+        .select('id, worker_id')
+        .eq('status', 'claimed')
+        .lt('claimed_at', claimedCutoff)
+
+      if (staleClaimed && staleClaimed.length > 0) {
+        for (const job of staleClaimed) {
+          await sb
+            .from('job_queue')
+            .update({
+              status: 'queued',
+              worker_id: null,
+              claimed_at: null,
+              heartbeat_at: null,
+              error: `Re-queued by reaper: claimed by ${job.worker_id} but never started`,
+            })
+            .eq('id', job.id)
+            .eq('status', 'claimed')  // CAS
+
+          console.log(`[reaper] Reset stale claimed job ${job.id}`)
+        }
+        wakeWorker()
+      }
+    } catch (err) {
+      console.error('[reaper] Unexpected error:', err)
+    }
+  }, REAPER_INTERVAL_MS)
+
+  console.log(
+    `[reaper] Stale job reaper started (interval: ${REAPER_INTERVAL_MS}ms, staleness: ${STALE_HEARTBEAT_MS}ms)`,
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Startup
 // ---------------------------------------------------------------------------
 
@@ -900,6 +1032,9 @@ async function main(): Promise<void> {
   // This will throw if SUPABASE_URL / SUPABASE_KEY are missing, which is
   // intentional -- we want a loud failure at startup.
   startRealtimeBridge()
+
+  // Start the stale job reaper — detects dead workers via heartbeat expiry
+  startReaper()
 
   // Start long polling. This will block until the process is stopped.
   console.log('Bot is now polling for updates.')
