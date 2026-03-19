@@ -965,6 +965,7 @@ function startReaper(): void {
             })
             .eq('id', job.id)
             .eq('status', 'running')  // CAS
+            .select('id')
 
           if (updated && updated.length > 0) {
             console.log(`[reaper] Job ${job.id} permanently failed (max attempts)`)
