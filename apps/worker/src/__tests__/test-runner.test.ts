@@ -277,9 +277,10 @@ packages = ["my_package"]
     stripLocalUvSources(tempDir)
 
     const result = readFileSync(join(tempDir, 'pyproject.toml'), 'utf-8')
-    // Path-based entry should be removed
-    expect(result).not.toContain('openadapt-ml')
+    // Path-based source override should be removed
     expect(result).not.toContain('path = "../openadapt-ml"')
+    // But the dependency itself in [project.dependencies] should remain
+    expect(result).toContain('openadapt-ml>=0.11.0')
     // Git-based entry should be preserved
     expect(result).toContain('openadapt-consilium')
     expect(result).toContain('git = "https://github.com/')
