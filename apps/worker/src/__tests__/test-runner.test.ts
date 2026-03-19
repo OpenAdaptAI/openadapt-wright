@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { detectTestRunner, detectPackageManager, detectMonorepo, runTests } from '../test-runner.js'
+import { existsSync, readFileSync } from 'fs'
+import { detectTestRunner, detectPackageManager, detectMonorepo, runTests, stripLocalUvSources } from '../test-runner.js'
 
 // Helper: create a temp directory with specific files
 function createTempDir(): string {
@@ -241,6 +242,112 @@ describe('detectMonorepo', () => {
     touchFile(tempDir, 'turbo.json', '{"pipeline":{}}')
     touchFile(tempDir, 'pnpm-workspace.yaml', 'packages:\n  - "apps/*"')
     expect(detectMonorepo(tempDir)).toBe('turborepo')
+  })
+})
+
+describe('stripLocalUvSources', () => {
+  let tempDir: string
+
+  beforeEach(() => {
+    tempDir = createTempDir()
+  })
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true })
+  })
+
+  it('strips path-based source entries from pyproject.toml', () => {
+    const pyprojectContent = `[project]
+name = "test-project"
+dependencies = [
+    "openadapt-ml>=0.11.0",
+    "openadapt-consilium>=0.3.2",
+]
+
+[tool.uv.sources]
+openadapt-consilium = { git = "https://github.com/OpenAdaptAI/openadapt-consilium.git" }
+openadapt-ml = { path = "../openadapt-ml", editable = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["my_package"]
+`
+    touchFile(tempDir, 'pyproject.toml', pyprojectContent)
+    touchFile(tempDir, 'uv.lock', 'some lock content')
+
+    stripLocalUvSources(tempDir)
+
+    const result = readFileSync(join(tempDir, 'pyproject.toml'), 'utf-8')
+    // Path-based source override should be removed
+    expect(result).not.toContain('path = "../openadapt-ml"')
+    // But the dependency itself in [project.dependencies] should remain
+    expect(result).toContain('openadapt-ml>=0.11.0')
+    // Git-based entry should be preserved
+    expect(result).toContain('openadapt-consilium')
+    expect(result).toContain('git = "https://github.com/')
+    // Other sections should be preserved
+    expect(result).toContain('[project]')
+    expect(result).toContain('[tool.hatch.build.targets.wheel]')
+    // uv.lock should be deleted
+    expect(existsSync(join(tempDir, 'uv.lock'))).toBe(false)
+  })
+
+  it('preserves pyproject.toml without [tool.uv.sources]', () => {
+    const pyprojectContent = `[project]
+name = "test-project"
+dependencies = ["requests>=2.28.0"]
+`
+    touchFile(tempDir, 'pyproject.toml', pyprojectContent)
+    touchFile(tempDir, 'uv.lock', 'some lock content')
+
+    stripLocalUvSources(tempDir)
+
+    const result = readFileSync(join(tempDir, 'pyproject.toml'), 'utf-8')
+    expect(result).toBe(pyprojectContent)
+    // uv.lock should NOT be deleted when no changes were made
+    expect(existsSync(join(tempDir, 'uv.lock'))).toBe(true)
+  })
+
+  it('preserves pyproject.toml with only git sources', () => {
+    const pyprojectContent = `[project]
+name = "test-project"
+
+[tool.uv.sources]
+consilium = { git = "https://github.com/example/consilium.git" }
+`
+    touchFile(tempDir, 'pyproject.toml', pyprojectContent)
+    touchFile(tempDir, 'uv.lock', 'some lock content')
+
+    stripLocalUvSources(tempDir)
+
+    const result = readFileSync(join(tempDir, 'pyproject.toml'), 'utf-8')
+    expect(result).toBe(pyprojectContent)
+    // uv.lock should NOT be deleted when no path sources were stripped
+    expect(existsSync(join(tempDir, 'uv.lock'))).toBe(true)
+  })
+
+  it('handles multiple path-based sources', () => {
+    const pyprojectContent = `[project]
+name = "test-project"
+
+[tool.uv.sources]
+pkg-a = { path = "../pkg-a", editable = true }
+pkg-b = { git = "https://github.com/example/pkg-b.git" }
+pkg-c = { path = "/absolute/path/to/pkg-c" }
+`
+    touchFile(tempDir, 'pyproject.toml', pyprojectContent)
+
+    stripLocalUvSources(tempDir)
+
+    const result = readFileSync(join(tempDir, 'pyproject.toml'), 'utf-8')
+    expect(result).not.toContain('pkg-a')
+    expect(result).not.toContain('pkg-c')
+    expect(result).toContain('pkg-b')
+    expect(result).toContain('git = "https://github.com/')
+  })
+
+  it('does nothing when pyproject.toml does not exist', () => {
+    // Should not throw
+    expect(() => stripLocalUvSources(tempDir)).not.toThrow()
   })
 })
 

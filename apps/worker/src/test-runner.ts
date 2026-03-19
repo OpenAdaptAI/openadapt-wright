@@ -1,5 +1,5 @@
 import { execSync } from 'child_process'
-import { existsSync, readFileSync } from 'fs'
+import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'fs'
 import { join } from 'path'
 import type { TestRunner, PackageManager, TestResults, TestFailure } from '@wright/shared'
 
@@ -136,6 +136,77 @@ export function detectPackageManager(workDir: string): PackageManager {
 }
 
 /**
+ * Strip local path-based source overrides from pyproject.toml's [tool.uv.sources].
+ *
+ * Many projects use `[tool.uv.sources]` to point dependencies at local sibling
+ * directories for development (e.g. `openadapt-ml = { path = "../openadapt-ml", editable = true }`).
+ * These paths don't exist on the worker, causing `uv sync` to fail immediately.
+ *
+ * This function removes any source entries that use `path = "..."` (local
+ * filesystem references) while preserving git/url sources. It also removes the
+ * stale `uv.lock` so uv regenerates it with PyPI-resolved versions.
+ *
+ * The packages themselves are still listed as regular dependencies (e.g.
+ * `openadapt-ml>=0.11.0`) and will resolve from PyPI without the source override.
+ */
+export function stripLocalUvSources(workDir: string): void {
+  const pyprojectPath = join(workDir, 'pyproject.toml')
+  if (!existsSync(pyprojectPath)) return
+
+  const content = readFileSync(pyprojectPath, 'utf-8')
+
+  // Check if there's a [tool.uv.sources] section with path-based entries
+  if (!content.includes('[tool.uv.sources]')) return
+
+  const lines = content.split('\n')
+  const outputLines: string[] = []
+  let inUvSources = false
+  let strippedAny = false
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    const trimmed = line.trim()
+
+    // Detect start of [tool.uv.sources] section
+    if (trimmed === '[tool.uv.sources]') {
+      inUvSources = true
+      outputLines.push(line)
+      continue
+    }
+
+    // Detect start of any other section (ends [tool.uv.sources])
+    if (inUvSources && trimmed.startsWith('[') && trimmed.endsWith(']')) {
+      inUvSources = false
+    }
+
+    if (inUvSources) {
+      // Skip lines that contain `path =` (local filesystem source)
+      // These look like: `package-name = { path = "../some-dir", editable = true }`
+      if (/\bpath\s*=\s*"/.test(line)) {
+        strippedAny = true
+        console.log(`[test-runner] Stripped local uv source: ${trimmed}`)
+        continue
+      }
+    }
+
+    outputLines.push(line)
+  }
+
+  if (strippedAny) {
+    writeFileSync(pyprojectPath, outputLines.join('\n'))
+    console.log('[test-runner] Removed local path sources from pyproject.toml')
+
+    // Delete uv.lock so uv regenerates it without the local sources.
+    // The old lock may contain entries tied to the local paths.
+    const lockPath = join(workDir, 'uv.lock')
+    if (existsSync(lockPath)) {
+      unlinkSync(lockPath)
+      console.log('[test-runner] Removed stale uv.lock (will regenerate)')
+    }
+  }
+}
+
+/**
  * Install dependencies using the detected package manager.
  */
 export function installDependencies(workDir: string, pm: PackageManager): void {
@@ -153,6 +224,12 @@ export function installDependencies(workDir: string, pm: PackageManager): void {
 
   const cmd = commands[pm]
   if (!cmd) return
+
+  // For uv projects, strip local path sources from pyproject.toml that reference
+  // sibling directories (e.g. "../openadapt-ml") which won't exist on the worker.
+  if (pm === 'uv') {
+    stripLocalUvSources(workDir)
+  }
 
   console.log(`[test-runner] Installing dependencies with ${pm}: ${cmd}`)
   try {
