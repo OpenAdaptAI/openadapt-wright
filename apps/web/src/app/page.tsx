@@ -152,6 +152,12 @@ export default function Home() {
             >
               Pricing
             </a>
+            <Link
+              href="/jobs"
+              className="text-sm text-slate-600 hover:text-slate-900"
+            >
+              Jobs
+            </Link>
             <a
               href="https://github.com/OpenAdaptAI/openadapt-wright"
               className="text-sm text-slate-600 hover:text-slate-900"
