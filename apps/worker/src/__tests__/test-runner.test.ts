@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { existsSync, readFileSync } from 'fs'
-import { detectTestRunner, detectPackageManager, detectMonorepo, runTests, stripLocalUvSources } from '../test-runner.js'
+import { detectTestRunner, detectPackageManager, detectMonorepo, runTests, stripLocalUvSources, stripHeavyPyDeps } from '../test-runner.js'
 
 // Helper: create a temp directory with specific files
 function createTempDir(): string {
@@ -348,6 +348,190 @@ pkg-c = { path = "/absolute/path/to/pkg-c" }
   it('does nothing when pyproject.toml does not exist', () => {
     // Should not throw
     expect(() => stripLocalUvSources(tempDir)).not.toThrow()
+  })
+})
+
+describe('stripHeavyPyDeps', () => {
+  let tempDir: string
+
+  beforeEach(() => {
+    tempDir = createTempDir()
+  })
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true })
+  })
+
+  it('strips heavy packages from base dependencies', () => {
+    const pyprojectContent = `[project]
+name = "test-project"
+dependencies = [
+    "requests>=2.28.0",
+    "torch>=2.8.0",
+    "torchvision>=0.24.1",
+    "pillow>=10.0.0",
+    "open-clip-torch>=2.20.0",
+    "transformers>=4.57.3",
+    "bitsandbytes>=0.41.0",
+    "peft>=0.18.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["my_package"]
+`
+    touchFile(tempDir, 'pyproject.toml', pyprojectContent)
+    touchFile(tempDir, 'uv.lock', 'some lock content')
+
+    stripHeavyPyDeps(tempDir)
+
+    const result = readFileSync(join(tempDir, 'pyproject.toml'), 'utf-8')
+    // Heavy packages should be removed
+    expect(result).not.toContain('torch>=2.8.0')
+    expect(result).not.toContain('torchvision')
+    expect(result).not.toContain('open-clip-torch')
+    expect(result).not.toContain('transformers')
+    expect(result).not.toContain('bitsandbytes')
+    expect(result).not.toContain('peft')
+    // Lightweight packages should be preserved
+    expect(result).toContain('requests>=2.28.0')
+    expect(result).toContain('pillow>=10.0.0')
+    // Other sections should be preserved
+    expect(result).toContain('[project]')
+    expect(result).toContain('[tool.hatch.build.targets.wheel]')
+    // uv.lock should be deleted
+    expect(existsSync(join(tempDir, 'uv.lock'))).toBe(false)
+  })
+
+  it('strips entire [project.optional-dependencies] section', () => {
+    const pyprojectContent = `[project]
+name = "test-project"
+dependencies = [
+    "requests>=2.28.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]
+training = [
+    "torch>=2.8.0",
+    "trl>=0.12.0",
+]
+azure = [
+    "azure-ai-ml>=1.12.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["my_package"]
+`
+    touchFile(tempDir, 'pyproject.toml', pyprojectContent)
+
+    stripHeavyPyDeps(tempDir)
+
+    const result = readFileSync(join(tempDir, 'pyproject.toml'), 'utf-8')
+    // Entire optional-dependencies section should be removed
+    expect(result).not.toContain('[project.optional-dependencies]')
+    expect(result).not.toContain('pytest>=8.0.0')
+    expect(result).not.toContain('trl>=0.12.0')
+    expect(result).not.toContain('azure-ai-ml')
+    // Base deps and other sections should be preserved
+    expect(result).toContain('requests>=2.28.0')
+    expect(result).toContain('[tool.hatch.build.targets.wheel]')
+  })
+
+  it('handles nvidia-* prefix packages', () => {
+    const pyprojectContent = `[project]
+name = "test-project"
+dependencies = [
+    "requests>=2.28.0",
+    "nvidia-cublas-cu12>=12.1.0",
+    "nvidia-cuda-runtime-cu12>=12.0",
+]
+`
+    touchFile(tempDir, 'pyproject.toml', pyprojectContent)
+
+    stripHeavyPyDeps(tempDir)
+
+    const result = readFileSync(join(tempDir, 'pyproject.toml'), 'utf-8')
+    expect(result).not.toContain('nvidia-cublas')
+    expect(result).not.toContain('nvidia-cuda-runtime')
+    expect(result).toContain('requests>=2.28.0')
+  })
+
+  it('preserves pyproject.toml with no heavy deps', () => {
+    const pyprojectContent = `[project]
+name = "test-project"
+dependencies = [
+    "requests>=2.28.0",
+    "pillow>=10.0.0",
+]
+`
+    touchFile(tempDir, 'pyproject.toml', pyprojectContent)
+    touchFile(tempDir, 'uv.lock', 'some lock content')
+
+    stripHeavyPyDeps(tempDir)
+
+    const result = readFileSync(join(tempDir, 'pyproject.toml'), 'utf-8')
+    expect(result).toBe(pyprojectContent)
+    // uv.lock should NOT be deleted when no changes were made
+    expect(existsSync(join(tempDir, 'uv.lock'))).toBe(true)
+  })
+
+  it('handles openadapt-evals-like pyproject.toml', () => {
+    const pyprojectContent = `[project]
+name = "openadapt-evals"
+version = "0.46.0"
+dependencies = [
+    "open-clip-torch>=2.20.0",
+    "pillow>=10.0.0",
+    "pydantic-settings>=2.0.0",
+    "requests>=2.28.0",
+    "openai>=1.0.0",
+    "anthropic>=0.76.0",
+    "openadapt-ml>=0.11.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.1.0",
+]
+training = [
+    "imagehash>=4.3.0",
+]
+verl = [
+    "verl>=0.3.0",
+]
+
+[tool.uv.sources]
+openadapt-ml = { path = "../openadapt-ml", editable = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["openadapt_evals"]
+`
+    touchFile(tempDir, 'pyproject.toml', pyprojectContent)
+
+    stripHeavyPyDeps(tempDir)
+
+    const result = readFileSync(join(tempDir, 'pyproject.toml'), 'utf-8')
+    // Heavy base dep should be stripped
+    expect(result).not.toContain('open-clip-torch')
+    // Optional deps section entirely removed
+    expect(result).not.toContain('[project.optional-dependencies]')
+    expect(result).not.toContain('verl')
+    // Lightweight base deps preserved
+    expect(result).toContain('pillow>=10.0.0')
+    expect(result).toContain('requests>=2.28.0')
+    expect(result).toContain('openai>=1.0.0')
+    expect(result).toContain('anthropic>=0.76.0')
+    expect(result).toContain('openadapt-ml>=0.11.0')
+    // Other sections preserved
+    expect(result).toContain('[tool.uv.sources]')
+    expect(result).toContain('[tool.hatch.build.targets.wheel]')
+  })
+
+  it('does nothing when pyproject.toml does not exist', () => {
+    expect(() => stripHeavyPyDeps(tempDir)).not.toThrow()
   })
 })
 

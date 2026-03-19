@@ -207,6 +207,159 @@ export function stripLocalUvSources(workDir: string): void {
 }
 
 /**
+ * Known heavy Python packages that should be stripped from dependencies
+ * on the worker. These packages (CUDA, PyTorch, large ML frameworks) are
+ * 100MB-2GB each and are not needed to run tests.
+ *
+ * Patterns are matched against the package name portion of dependency lines
+ * (before any version specifier). Case-insensitive.
+ */
+const HEAVY_PY_PACKAGES = [
+  'torch',
+  'torchvision',
+  'torchaudio',
+  'open-clip-torch',
+  'bitsandbytes',
+  'triton',
+  'nvidia-',           // nvidia-cublas-cu12, nvidia-cuda-runtime-cu12, etc.
+  'cu12',              // standalone CUDA 12 packages
+  'cu11',              // standalone CUDA 11 packages
+  'xformers',
+  'flash-attn',
+  'deepspeed',
+  'apex',
+  'vllm',
+  'transformers',
+  'accelerate',
+  'peft',
+  'safetensors',
+  'sentencepiece',
+  'tokenizers',
+]
+
+/**
+ * Check if a dependency line references a heavy package.
+ *
+ * Dependency lines look like:
+ *   "torch>=2.8.0"
+ *   "open-clip-torch>=2.20.0"
+ *   "nvidia-cublas-cu12>=12.1.0"
+ *
+ * We match the package name (everything before `>=`, `==`, `~=`, `<`, `>`, `[`, etc.)
+ * against the HEAVY_PY_PACKAGES patterns.
+ */
+function isHeavyDep(depLine: string): boolean {
+  const trimmed = depLine.trim().replace(/^["']|["'],?\s*$/g, '')
+  if (!trimmed || trimmed.startsWith('#')) return false
+
+  // Extract package name (before version specifier)
+  const pkgName = trimmed.split(/[>=<!~\[;]/)[0].trim().toLowerCase()
+  if (!pkgName) return false
+
+  return HEAVY_PY_PACKAGES.some(pattern => {
+    const p = pattern.toLowerCase()
+    // If pattern ends with '-', match as prefix
+    if (p.endsWith('-')) {
+      return pkgName.startsWith(p)
+    }
+    return pkgName === p
+  })
+}
+
+/**
+ * Strip heavy ML/CUDA dependencies from pyproject.toml to keep installs lightweight.
+ *
+ * The Wright worker runs tests, not training. Heavy packages like PyTorch (2GB+),
+ * CUDA libraries, and large ML frameworks slow down installs, eat disk space, and
+ * may fail entirely on non-GPU containers.
+ *
+ * This function:
+ *   1. Removes known heavy packages from `[project] dependencies = [...]`
+ *   2. Removes the entire `[project.optional-dependencies]` section (all groups).
+ *      Optional deps are already skipped by `uv sync --no-dev`, but some groups
+ *      may be pulled in transitively or via `all = [...]` meta-groups.
+ *
+ * Combined with `--inexact`, missing transitive deps from stripped packages are
+ * tolerated — uv will install what it can and skip the rest.
+ */
+export function stripHeavyPyDeps(workDir: string): void {
+  const pyprojectPath = join(workDir, 'pyproject.toml')
+  if (!existsSync(pyprojectPath)) return
+
+  const content = readFileSync(pyprojectPath, 'utf-8')
+  const lines = content.split('\n')
+  const outputLines: string[] = []
+  let inDeps = false
+  let inOptDeps = false
+  let inOptGroup = false
+  let strippedAny = false
+  let bracketDepth = 0
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    const trimmed = line.trim()
+
+    // Track [project.optional-dependencies] section — skip it entirely
+    if (trimmed === '[project.optional-dependencies]') {
+      inOptDeps = true
+      inOptGroup = false
+      strippedAny = true
+      console.log('[test-runner] Stripping [project.optional-dependencies] section')
+      continue
+    }
+
+    // If we're in optional-dependencies, skip until we hit a new top-level section
+    if (inOptDeps) {
+      if (trimmed.startsWith('[') && trimmed.endsWith(']') && trimmed !== '[project.optional-dependencies]') {
+        inOptDeps = false
+        // Fall through to process this line normally
+      } else {
+        continue
+      }
+    }
+
+    // Track `dependencies = [` in [project] section
+    if (/^dependencies\s*=\s*\[/.test(trimmed)) {
+      inDeps = true
+      bracketDepth = (line.match(/\[/g) || []).length - (line.match(/\]/g) || []).length
+      outputLines.push(line)
+      continue
+    }
+
+    if (inDeps) {
+      // Track bracket depth (handles multi-line arrays)
+      bracketDepth += (line.match(/\[/g) || []).length - (line.match(/\]/g) || []).length
+      if (bracketDepth <= 0) {
+        inDeps = false
+        outputLines.push(line)
+        continue
+      }
+
+      // Check if this dependency line is heavy
+      if (isHeavyDep(trimmed)) {
+        strippedAny = true
+        console.log(`[test-runner] Stripped heavy dependency: ${trimmed}`)
+        continue
+      }
+    }
+
+    outputLines.push(line)
+  }
+
+  if (strippedAny) {
+    writeFileSync(pyprojectPath, outputLines.join('\n'))
+    console.log('[test-runner] Removed heavy dependencies from pyproject.toml')
+
+    // Delete uv.lock so uv regenerates it without the heavy deps
+    const lockPath = join(workDir, 'uv.lock')
+    if (existsSync(lockPath)) {
+      unlinkSync(lockPath)
+      console.log('[test-runner] Removed stale uv.lock (will regenerate)')
+    }
+  }
+}
+
+/**
  * Install dependencies using the detected package manager.
  */
 export function installDependencies(workDir: string, pm: PackageManager): void {
@@ -215,7 +368,7 @@ export function installDependencies(workDir: string, pm: PackageManager): void {
     pnpm: 'pnpm install',
     yarn: 'yarn install',
     pip: 'pip install -e .',
-    uv: 'uv sync',
+    uv: 'uv sync --no-dev --inexact',
     poetry: 'poetry install',
     cargo: 'cargo build',
     go: 'go mod download',
@@ -225,10 +378,13 @@ export function installDependencies(workDir: string, pm: PackageManager): void {
   const cmd = commands[pm]
   if (!cmd) return
 
-  // For uv projects, strip local path sources from pyproject.toml that reference
-  // sibling directories (e.g. "../openadapt-ml") which won't exist on the worker.
+  // For uv projects, strip local path sources and heavy ML dependencies from
+  // pyproject.toml. Local paths reference sibling directories (e.g. "../openadapt-ml")
+  // that won't exist on the worker. Heavy deps (PyTorch, CUDA, etc.) are 100MB-2GB
+  // each and not needed to run tests.
   if (pm === 'uv') {
     stripLocalUvSources(workDir)
+    stripHeavyPyDeps(workDir)
   }
 
   console.log(`[test-runner] Installing dependencies with ${pm}: ${cmd}`)
