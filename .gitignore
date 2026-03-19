@@ -30,3 +30,8 @@ pnpm-debug.log*
 
 # Supabase
 supabase/.temp/
+
+# Next.js
+.next/
+out/
+next-env.d.ts
