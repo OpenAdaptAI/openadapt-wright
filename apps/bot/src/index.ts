@@ -35,6 +35,24 @@ if (!GITHUB_TOKEN) {
   process.exit(1)
 }
 
+const WORKER_URL = process.env.WORKER_URL || 'https://wright-worker.fly.dev'
+
+/**
+ * Wake the worker by hitting its health endpoint.
+ * This triggers Fly.io auto-start if the machine is stopped.
+ * Errors are silently ignored — the request just needs to reach Fly's proxy.
+ */
+async function wakeWorker(): Promise<void> {
+  try {
+    await fetch(`${WORKER_URL}/health`, { signal: AbortSignal.timeout(5000) })
+    console.log('[wake] Worker pinged successfully')
+  } catch {
+    // Ignore — the request just needs to trigger Fly.io auto-start.
+    // The machine may take a few seconds to boot, so a timeout is expected.
+    console.log('[wake] Worker ping sent (may be booting)')
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Bot setup
 // ---------------------------------------------------------------------------
@@ -349,6 +367,9 @@ bot.command('revise', async (ctx: Context) => {
       parentJobId: originalJob.id,
     })
 
+    // Wake the worker so it picks up the revision job
+    wakeWorker()
+
     await ctx.reply(
       [
         '\u{1F504} <b>Revision queued!</b>',
@@ -441,6 +462,9 @@ bot.command('task', async (ctx: Context) => {
         parentJobId,
       })
 
+      // Wake the worker so it picks up the PR revision job
+      wakeWorker()
+
       await ctx.reply(
         [
           '\u{1F504} <b>PR revision queued!</b>',
@@ -494,6 +518,9 @@ bot.command('task', async (ctx: Context) => {
       messageId: ack.message_id,
       githubToken: GITHUB_TOKEN,
     })
+
+    // Wake the worker so it picks up the new job
+    wakeWorker()
 
     await ctx.reply(
       [
@@ -665,6 +692,9 @@ bot.on('message:text', async (ctx, next) => {
       featureBranch,
       parentJobId: originalJob.id,
     })
+
+    // Wake the worker so it picks up the revision job
+    wakeWorker()
 
     await ctx.reply(
       [

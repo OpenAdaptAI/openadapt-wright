@@ -19,7 +19,7 @@ const FLY_APP_NAME = process.env.FLY_APP_NAME || 'wright-worker'
 // Track active jobs with AbortControllers for cancellation
 const runningJobs = new Map<string, AbortController>()
 let activeJobs = 0
-const IDLE_SHUTDOWN_MS = 5 * 60 * 1000 // 5 min idle → exit (scale-to-zero)
+const IDLE_SHUTDOWN_MS = 15 * 60 * 1000 // 15 min idle → exit (scale-to-zero)
 let idleTimer: ReturnType<typeof setTimeout> | null = null
 let keepAliveInterval: ReturnType<typeof setInterval> | null = null
 
@@ -27,7 +27,7 @@ function resetIdleTimer() {
   if (idleTimer) clearTimeout(idleTimer)
   if (activeJobs === 0) {
     idleTimer = setTimeout(() => {
-      console.log('No active jobs for 5 minutes, shutting down')
+      console.log('No active jobs for 15 minutes, shutting down')
       process.exit(0)
     }, IDLE_SHUTDOWN_MS)
   }
