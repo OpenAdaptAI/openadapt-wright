@@ -215,7 +215,7 @@ export function installDependencies(workDir: string, pm: PackageManager): void {
     pnpm: 'pnpm install',
     yarn: 'yarn install',
     pip: 'pip install -e .',
-    uv: 'uv sync',
+    uv: 'uv sync --no-dev --inexact',
     poetry: 'poetry install',
     cargo: 'cargo build',
     go: 'go mod download',
