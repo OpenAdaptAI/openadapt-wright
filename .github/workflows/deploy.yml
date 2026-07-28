@@ -14,15 +14,73 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # WHY THIS GATE EXISTS
+  # --------------------
+  # Every run of this workflow has failed -- 9 for 9, from 2026-03-02 to
+  # 2026-03-19 -- and always at the last step, `flyctl deploy`. The cause is
+  # that `FLY_API_TOKEN` does not exist: not as a repository secret, not as an
+  # organization secret, and not as a secret on the `production` environment
+  # this job declares. `flyctl` was being handed an empty token every time.
+  #
+  # Without the credential the deploy cannot succeed, but the workflow still
+  # ran the full `ci` reusable workflow first -- lint, test, and build --
+  # duplicating the `CI` run that `ci.yml` already performs on the same push,
+  # and only then failed. This job moves the cheapest decisive check to the
+  # front (AGENTS.md 5.1), so a missing credential costs seconds instead of a
+  # duplicated build matrix.
+  #
+  # It fails rather than skipping, deliberately. `wright-worker.fly.dev` is
+  # live, so the worker is currently deployed by hand; a green run here would
+  # report a deploy path that is not wired. The red is the accurate signal, and
+  # it now says why. To clear it, add `FLY_API_TOKEN` to the `production`
+  # environment:
+  #
+  #     fly tokens create deploy --app wright-worker
+  #     gh secret set FLY_API_TOKEN --repo OpenAdaptAI/openadapt-wright \
+  #       --env production
+  preflight:
+    name: Preflight (deploy credentials)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Must match the deploy job's environment, or an environment-scoped
+    # FLY_API_TOKEN would be invisible here and the gate would fail even once
+    # the secret exists.
+    environment: production
+    steps:
+      - name: Require FLY_API_TOKEN
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${FLY_API_TOKEN}" ]; then
+            {
+              echo "### Deploy blocked: FLY_API_TOKEN is not set"
+              echo
+              echo "\`flyctl deploy\` cannot authenticate, so this workflow"
+              echo "cannot deploy the worker. Add the secret to the"
+              echo "\`production\` environment:"
+              echo
+              echo '```'
+              echo "fly tokens create deploy --app wright-worker"
+              echo "gh secret set FLY_API_TOKEN \\"
+              echo "  --repo OpenAdaptAI/openadapt-wright --env production"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error title=Missing FLY_API_TOKEN::Add FLY_API_TOKEN to the 'production' environment; flyctl cannot authenticate without it."
+            exit 1
+          fi
+          echo "FLY_API_TOKEN is present; continuing to CI and deploy."
+
   # Gate deployment behind a successful CI run
   ci:
     name: CI
+    needs: preflight
     uses: ./.github/workflows/ci.yml
 
   deploy:
     name: Deploy to Fly.io
     runs-on: ubuntu-latest
-    needs: ci
+    needs: [preflight, ci]
     timeout-minutes: 15
     environment: production
 
