@@ -18,13 +18,25 @@ RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
 
 WORKDIR /app
 
-# Copy only what pnpm needs for dependency resolution (layer cache)
-COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* turbo.json ./
+# Copy only what pnpm needs for dependency resolution (layer cache).
+#
+# `pnpm-lock.yaml` is copied WITHOUT a glob on purpose. The previous
+# `pnpm-lock.yaml*` tolerated the file being absent, so a build with no
+# lockfile at all still succeeded and resolved whatever was newest that day.
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml turbo.json ./
 COPY packages/shared/package.json packages/shared/
 COPY apps/worker/package.json apps/worker/
 
-# Install all deps (including devDependencies needed for build)
-RUN pnpm install --frozen-lockfile || pnpm install
+# Install all deps (including devDependencies needed for build).
+#
+# No `|| pnpm install` fallback. That fallback silently defeated the lockfile:
+# when the lockfile was stale or unreadable, `--frozen-lockfile` failed, the
+# fallback re-resolved every dependency from scratch, and the build went green
+# with a dependency set nobody had reviewed. The deployed image was therefore
+# not reproducible from the commit it claimed to come from, and lockfile drift
+# was invisible. Fail loudly instead: a stale lockfile is a change to make in
+# the repository, not a thing for the release build to paper over.
+RUN pnpm install --frozen-lockfile
 
 # ---------------------------------------------------------------------------
 # Stage 2: Build TypeScript
